@@ -63,6 +63,7 @@ internal class SessionDraftStore {
 internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: String?,
     onBrowse: (String?) -> Unit, onBrowseInto: (String) -> Unit, onBrowseUp: () -> Unit,
     onCancel: () -> Unit = {}, drafts: SessionDraftStore? = null,
+    onOpenExistingSession: (String) -> Unit = {},
     onLoadConfiguration: (String, String) -> Unit = { _, _ -> },
     onSaveConfiguration: (SessionConfigurationValues) -> Unit = {},
     onSubmit: (String, String, String, Rect, Rect) -> Boolean) {
@@ -74,6 +75,7 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
     var fieldValue by draft.editing
     LaunchedEffect(text) { if (fieldValue.text != text) fieldValue = TextFieldValue(text, selection = TextRange(text.length)) }
     var directoryOpen by rememberSaveable { mutableStateOf(false) }
+    var browsingFolders by rememberSaveable { mutableStateOf(false) }
     var agentMenu by remember { mutableStateOf<String?>(null) }
     var pressed by remember { mutableStateOf(true) }
     val appearance = remember { Animatable(0f) }
@@ -181,7 +183,7 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
                     }
                 }
                 Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("draft-directory")
-                    .orbisKeyboardFocus().clickable(role = Role.Button) { directoryOpen = true; onBrowse(cwd.takeIf(String::isNotBlank)) },
+                    .orbisKeyboardFocus().clickable(role = Role.Button) { browsingFolders = false; directoryOpen = true },
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Icon(OrbisSymbols.Folder, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(cwd.ifBlank { L10n.tr("选择工作目录") }, Modifier.weight(1f), style = MaterialTheme.typography.labelMedium,
@@ -272,14 +274,54 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
                 enabled = state.e2eReady && config.requestId == null && proposedPermissions != config.values.permissions,
                 modifier = Modifier.fillMaxWidth().padding(16.dp).testTag("draft-permissions-apply"))
         }
-        if (directoryOpen) OrbisChoiceSheet(L10n.tr("工作目录"), { directoryOpen = false }) {
-            RemoteDirectoryBrowser(state.sessionBrowse, state.e2eReady, onBrowse, onBrowseInto, onBrowseUp,
-                modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp))
-            val browse = state.sessionBrowse
-            NeumorphActionButton(text = L10n.tr("使用此目录"), onClick = {
-                browse?.path?.takeIf(String::isNotBlank)?.let { cwd = it; directoryOpen = false }
-            }, enabled = browse != null && !browse.isLoading && browse.error == null && !browse.path.isNullOrBlank(),
-                modifier = Modifier.fillMaxWidth())
+        if (directoryOpen) OrbisChoiceSheet(
+            L10n.tr(if (browsingFolders) "工作目录" else "选择项目或会话"),
+            { directoryOpen = false },
+        ) {
+            if (!browsingFolders) {
+                val sessions = state.recentHomeSessions()
+                val projects = state.recentHomeProjects()
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (sessions.isNotEmpty()) {
+                        Text(L10n.tr("继续最近会话"), style = MaterialTheme.typography.titleSmall)
+                        sessions.forEach { session ->
+                            val label = session.name?.takeIf(String::isNotBlank)
+                                ?: session.firstMessage?.take(44)?.takeIf(String::isNotBlank)
+                                ?: homeDirectoryLabel(session.cwd)
+                            NeumorphTextButton(
+                                text = label,
+                                onClick = { directoryOpen = false; onOpenExistingSession(session.sessionId) },
+                                modifier = Modifier.fillMaxWidth().testTag("draft-recent-session-${session.sessionId}"),
+                            )
+                        }
+                    }
+                    if (projects.isNotEmpty()) {
+                        Text(L10n.tr("最近使用的项目"), style = MaterialTheme.typography.titleSmall)
+                        projects.forEach { project ->
+                            NeumorphTextButton(
+                                text = project.label,
+                                onClick = { cwd = project.cwd; directoryOpen = false },
+                                filled = project.cwd == cwd,
+                                modifier = Modifier.fillMaxWidth().testTag("draft-recent-project"),
+                            )
+                        }
+                    }
+                    NeumorphTextButton(
+                        text = L10n.tr("浏览其他文件夹"),
+                        onClick = { browsingFolders = true; onBrowse(cwd.takeIf(String::isNotBlank)) },
+                        dismissOnClick = false,
+                        modifier = Modifier.fillMaxWidth().testTag("draft-browse-other-folders"),
+                    )
+                }
+            } else {
+                RemoteDirectoryBrowser(state.sessionBrowse, state.e2eReady, onBrowse, onBrowseInto, onBrowseUp,
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp))
+                val browse = state.sessionBrowse
+                NeumorphActionButton(text = L10n.tr("使用此目录"), onClick = {
+                    browse?.path?.takeIf(String::isNotBlank)?.let { cwd = it; directoryOpen = false }
+                }, enabled = browse != null && !browse.isLoading && browse.error == null && !browse.path.isNullOrBlank(),
+                    modifier = Modifier.fillMaxWidth())
+            }
         }
     }
 }
