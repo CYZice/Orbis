@@ -205,6 +205,22 @@ class HomePresentationTest {
         assertEquals("running", withSecondRuntime.orderHomeCards(cards).first().runtime.runtimeId)
     }
 
+    @Test fun nativeProjectsTakePrecedenceWithoutHidingKnownFolders() {
+        val native = NativeCodexProject("C:/Research/Optics", "Optics PIC", recencyAt = 10_000L)
+        val state = RemoteState(
+            nativeCodexProjects = listOf(native),
+            sessions = mapOf(
+                "a" to SessionCatalogEntry("a", cwd = "C:/Research/Optics", modifiedAt = 1_000L),
+                "b" to SessionCatalogEntry("b", cwd = "C:/Research/Zotero", modifiedAt = 2_000L),
+            ),
+        )
+        val projects = state.homeProjectPickerEntries()
+        assertEquals(2, projects.size)
+        assertEquals(listOf("Optics PIC", "Zotero"), projects.map { it.label })
+        assertEquals("C:/Research/Optics", projects[0].cwd)
+        assertEquals(10_000L, projects[0].lastActivityAt)
+    }
+
     @Test fun nativeCodexRecencyOutranksDiskModifiedAtAndToolOutput() {
         val active = RuntimeSummary("active", "Codex", "C:/Alpha", "running",
             sessionId = "alpha", agentKind = "codex")
