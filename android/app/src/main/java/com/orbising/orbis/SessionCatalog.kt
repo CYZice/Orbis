@@ -18,6 +18,8 @@ data class SessionCatalogEntry(
     val firstMessage: String? = null,
     val createdAt: Long = 0,
     val modifiedAt: Long = 0,
+    /** Native Codex activity timestamp, if supplied by thread/list. */
+    val recencyAt: Long? = null,
     val messageCount: Int = 0,
     val hasHistoryCache: Boolean = false,
     /**
