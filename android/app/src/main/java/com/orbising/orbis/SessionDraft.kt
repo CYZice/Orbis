@@ -63,7 +63,6 @@ internal class SessionDraftStore {
 internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: String?,
     onBrowse: (String?) -> Unit, onBrowseInto: (String) -> Unit, onBrowseUp: () -> Unit,
     onCancel: () -> Unit = {}, drafts: SessionDraftStore? = null,
-    onOpenExistingSession: (String) -> Unit = {},
     autoProjectPicker: Boolean = false,
     onLoadConfiguration: (String, String) -> Unit = { _, _ -> },
     onSaveConfiguration: (SessionConfigurationValues) -> Unit = {},
@@ -77,6 +76,7 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
     LaunchedEffect(text) { if (fieldValue.text != text) fieldValue = TextFieldValue(text, selection = TextRange(text.length)) }
     var directoryOpen by rememberSaveable { mutableStateOf(false) }
     var browsingFolders by rememberSaveable { mutableStateOf(false) }
+    var projectSearch by rememberSaveable { mutableStateOf("") }
     var agentMenu by remember { mutableStateOf<String?>(null) }
     var pressed by remember { mutableStateOf(true) }
     val appearance = remember { Animatable(0f) }
@@ -103,6 +103,7 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
         if (open) {
             if (autoProjectPicker && state.recentHomeProjects().isNotEmpty()) {
                 browsingFolders = false
+                projectSearch = ""
                 directoryOpen = true
             }
             pressed = true; appearance.snapTo(0f)
@@ -188,7 +189,7 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
                     }
                 }
                 Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("draft-directory")
-                    .orbisKeyboardFocus().clickable(role = Role.Button) { browsingFolders = false; directoryOpen = true },
+                    .orbisKeyboardFocus().clickable(role = Role.Button) { browsingFolders = false; projectSearch = ""; directoryOpen = true },
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Icon(OrbisSymbols.Folder, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(cwd.ifBlank { L10n.tr("选择工作目录") }, Modifier.weight(1f), style = MaterialTheme.typography.labelMedium,
@@ -280,29 +281,32 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
                 modifier = Modifier.fillMaxWidth().padding(16.dp).testTag("draft-permissions-apply"))
         }
         if (directoryOpen) OrbisChoiceSheet(
-            L10n.tr(if (browsingFolders) "工作目录" else "选择项目或会话"),
+            L10n.tr(if (browsingFolders) "工作目录" else "选择项目"),
             { directoryOpen = false },
         ) {
             if (!browsingFolders) {
-                val sessions = state.recentHomeSessions()
-                val projects = state.recentHomeProjects()
+                val allProjects = state.recentHomeProjects(limit = Int.MAX_VALUE)
+                val search = projectSearch.trim()
+                val matches = if (search.isEmpty()) allProjects else allProjects.filter { project ->
+                    project.label.contains(search, ignoreCase = true) ||
+                        project.cwd.contains(search, ignoreCase = true)
+                }
+                // Four rows on entry; never expand the entire project catalog into a long modal.
+                val visibleProjects = matches.take(if (search.isEmpty()) 4 else 6)
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (sessions.isNotEmpty()) {
-                        Text(L10n.tr("继续最近会话"), style = MaterialTheme.typography.titleSmall)
-                        sessions.forEach { session ->
-                            val label = session.name?.takeIf(String::isNotBlank)
-                                ?: session.firstMessage?.take(44)?.takeIf(String::isNotBlank)
-                                ?: homeDirectoryLabel(session.cwd)
-                            NeumorphTextButton(
-                                text = label,
-                                onClick = { directoryOpen = false; onOpenExistingSession(session.sessionId) },
-                                modifier = Modifier.fillMaxWidth().testTag("draft-recent-session-${session.sessionId}"),
-                            )
-                        }
-                    }
-                    if (projects.isNotEmpty()) {
-                        Text(L10n.tr("最近使用的项目"), style = MaterialTheme.typography.titleSmall)
-                        projects.forEach { project ->
+                    OutlinedTextField(
+                        value = projectSearch,
+                        onValueChange = { projectSearch = it },
+                        modifier = Modifier.fillMaxWidth().testTag("draft-project-search"),
+                        label = { Text(L10n.tr("搜索项目")) },
+                        singleLine = true,
+                        maxLines = 1,
+                        colors = neumorphFieldColors(),
+                    )
+                    if (visibleProjects.isNotEmpty()) {
+                        Text(L10n.tr(if (search.isEmpty()) "最近使用的项目" else "搜索结果"),
+                            style = MaterialTheme.typography.titleSmall)
+                        visibleProjects.forEach { project ->
                             NeumorphTextButton(
                                 text = project.label,
                                 onClick = { cwd = project.cwd; directoryOpen = false; focus.requestFocus() },
@@ -310,6 +314,15 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
                                 modifier = Modifier.fillMaxWidth().testTag("draft-recent-project"),
                             )
                         }
+                        if (matches.size > visibleProjects.size) {
+                            Text(L10n.tr("还有 {0} 个项目，请输入名称缩小范围", matches.size - visibleProjects.size),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    } else {
+                        Text(L10n.tr(if (search.isEmpty()) "暂无最近项目" else "没有找到匹配的项目"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     NeumorphTextButton(
                         text = L10n.tr("浏览其他文件夹"),
