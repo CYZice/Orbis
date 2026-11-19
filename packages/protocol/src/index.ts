@@ -1506,6 +1506,12 @@ export const RelayToDeviceMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("session.list.result"),
     requestId: z.string().min(1).max(128),
     sessions: z.array(AgentSessionSummarySchema).max(2_000),
+    /** Optional native Codex project roots, supplied only by Hosts that support project/list. */
+    nativeProjects: z.array(z.strictObject({
+      cwd: z.string().min(1).max(4096),
+      name: z.string().min(1).max(256),
+      recencyAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    })).max(160).optional(),
     /** Backend configuration, including when the backend has no sessions. */
     currentProviders: z.array(z.strictObject({
       agentKind: AgentKindSchema,
