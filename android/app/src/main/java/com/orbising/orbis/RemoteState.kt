@@ -815,6 +815,7 @@ internal fun mergeSessionCatalogEntry(
         firstMessage = incoming.firstMessage ?: existing.firstMessage,
         createdAt = if (incoming.createdAt > 0) incoming.createdAt else existing.createdAt,
         modifiedAt = maxOf(existing.modifiedAt, incoming.modifiedAt),
+        recencyAt = listOfNotNull(existing.recencyAt, incoming.recencyAt).maxOrNull(),
         messageCount = maxOf(existing.messageCount, incoming.messageCount),
         hasHistoryCache = existing.hasHistoryCache || incoming.hasHistoryCache,
         hostname = incoming.hostname?.takeIf(String::isNotBlank) ?: existing.hostname,
