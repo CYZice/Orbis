@@ -64,6 +64,7 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
     onBrowse: (String?) -> Unit, onBrowseInto: (String) -> Unit, onBrowseUp: () -> Unit,
     onCancel: () -> Unit = {}, drafts: SessionDraftStore? = null,
     onOpenExistingSession: (String) -> Unit = {},
+    autoProjectPicker: Boolean = false,
     onLoadConfiguration: (String, String) -> Unit = { _, _ -> },
     onSaveConfiguration: (SessionConfigurationValues) -> Unit = {},
     onSubmit: (String, String, String, Rect, Rect) -> Boolean) {
@@ -100,12 +101,16 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
     fun versionsAvailable(of: String) = agentVariants(of).size > 1 && agentVariants(of).all { supported?.contains(it) == true }
     LaunchedEffect(open) {
         if (open) {
+            if (autoProjectPicker && state.recentHomeProjects().isNotEmpty()) {
+                browsingFolders = false
+                directoryOpen = true
+            }
             pressed = true; appearance.snapTo(0f)
             delay(InteractionMotion.duration(200).toLong())
             pressed = false
             delay(InteractionMotion.duration(120).toLong())
             appearance.animateTo(1f, tween(InteractionMotion.duration(InteractionMotion.State)))
-            focus.requestFocus()
+            if (!directoryOpen) focus.requestFocus()
         } else {
             appearance.animateTo(0f, tween(InteractionMotion.duration(InteractionMotion.State)))
             pressed = true
@@ -300,7 +305,7 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
                         projects.forEach { project ->
                             NeumorphTextButton(
                                 text = project.label,
-                                onClick = { cwd = project.cwd; directoryOpen = false },
+                                onClick = { cwd = project.cwd; directoryOpen = false; focus.requestFocus() },
                                 filled = project.cwd == cwd,
                                 modifier = Modifier.fillMaxWidth().testTag("draft-recent-project"),
                             )
