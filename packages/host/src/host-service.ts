@@ -2793,7 +2793,7 @@ export class HostService {
         // 实测 2.5–6s，Pi 侧全盘扫）。手机在每次激活/重连/回前台都会请求一遍，
         // 不收敛的话这些请求会互相堆叠、把每一台设备都拖进几十秒的等待。
         // 这里按 TTL 缓存 + 合并并发请求：同一时刻的多个 `session.list` 共享同一次扫描。
-        const [{ sessions, cached }, providers] = await Promise.all([
+        const [{ sessions, cached }, providers, projectPages] = await Promise.all([
           this.#catalogWithCache(),
           Promise.all(this.#backends.filter((backend) => backend.isReady()).map(async (backend) => {
             try {
@@ -2809,14 +2809,27 @@ export class HostService {
               return [];
             }
           })),
+          Promise.all(this.#backends.filter((backend) => backend.isReady()).map(async (backend) => {
+            if (!backend.listProjects) return [];
+            try { return await backend.listProjects(); }
+            catch (error) {
+              this.#options.log?.(`读取原生项目失败（${backend.kind}）：${describeError(error)}`);
+              return [];
+            }
+          })),
         ]);
         // 这里**不再**写 HostState.providers：会话列表只认识「当前 provider」，而这个领域是
         // 整值替换——让它写一次，就会把真正读过清单的那条路径（供应商读取/切换后）写下的
         // profiles 与 authenticated 冲成 null。模型里的供应商摘要由 refreshProviderFacts() 独占写入；
         // 手机要用的 current 仍然在这条消息的返回值里（currentProviders），不受影响。
         const localHostname = hostname();
+        // Preserve native project order and bound the optional payload for small phone screens.
+        const nativeProjects = [...new Map(projectPages.flat().map(project => [
+          process.platform === "win32" ? project.cwd.toLowerCase() : project.cwd, project,
+        ] as const)).values()].slice(0, 120);
         const payload = {
           type: "session.list.result" as const,
+          ...(nativeProjects.length === 0 ? {} : { nativeProjects }),
           requestId,
           sessions: sessions.filter(row => allowsAgentIdentity(this.#agentView(deviceId), row)).slice(0, 2_000).map(entry => ({ ...entry, hostname: localHostname })),
           currentProviders: providers.flat(),
