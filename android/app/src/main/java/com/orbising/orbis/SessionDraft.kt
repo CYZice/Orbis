@@ -101,7 +101,7 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
     fun versionsAvailable(of: String) = agentVariants(of).size > 1 && agentVariants(of).all { supported?.contains(it) == true }
     LaunchedEffect(open) {
         if (open) {
-            if (autoProjectPicker && state.recentHomeProjects().isNotEmpty()) {
+            if (autoProjectPicker && state.homeProjectPickerEntries().isNotEmpty()) {
                 browsingFolders = false
                 projectSearch = ""
                 directoryOpen = true
@@ -285,7 +285,7 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
             { directoryOpen = false },
         ) {
             if (!browsingFolders) {
-                val allProjects = state.recentHomeProjects(limit = Int.MAX_VALUE)
+                val allProjects = state.homeProjectPickerEntries()
                 val search = projectSearch.trim()
                 val matches = if (search.isEmpty()) allProjects else allProjects.filter { project ->
                     project.label.contains(search, ignoreCase = true) ||
