@@ -1706,6 +1706,7 @@ describe("CodexRuntime", () => {
           preview: "帮我看看这个设计",
           createdAt: 1_782_812_705,
           updatedAt: 1_782_812_800,
+          recencyAt: 1_782_812_790,
           turns: [{ id: "t1", items: [], status: "completed" }],
         },
         {
@@ -1728,6 +1729,7 @@ describe("CodexRuntime", () => {
       firstMessage: "帮我看看这个设计",
       createdAt: 1_782_812_705_000,
       modifiedAt: 1_782_812_800_000,
+      recencyAt: 1_782_812_790_000,
       messageCount: 1,
       agentKind: "codex",
     });
