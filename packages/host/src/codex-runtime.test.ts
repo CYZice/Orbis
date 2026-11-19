@@ -1692,6 +1692,25 @@ describe("CodexRuntime", () => {
     })]);
   });
 
+  it("native project/list maps named roots and safely falls back for older Codex", async () => {
+    const h = makeHarness();
+    const listing = h.runtime.listProjects();
+    expect(h.requests).toHaveBeenCalledWith("project/list",
+      { sortKey: "recencyAt", sortDirection: "desc", limit: 80 });
+    h.resolveNext({ data: [
+      { id: "p1", name: "Research", roots: [{ path: "D:/PIC" }], recencyAt: 1_782_812_790 },
+      { id: "p2", name: "Misc", roots: [{ path: "D:/Other" }] },
+      { id: "bad", name: "", roots: [{ path: "D:/Wrong" }] },
+    ] });
+    expect(await listing).toEqual([
+      { cwd: "D:/PIC", name: "Research", recencyAt: 1_782_812_790_000 },
+      { cwd: "D:/Other", name: "Misc" },
+    ]);
+    const unsupported = h.runtime.listProjects();
+    h.rejectNext(new Error("method not found"));
+    expect(await unsupported).toEqual([]);
+  });
+
   it("catalog：thread/list 的结果映射成 agentKind=codex 的目录条目（Unix 秒 → 毫秒）", async () => {
     const h = makeHarness();
     const pending = h.runtime.catalog();
