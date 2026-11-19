@@ -145,7 +145,7 @@ internal fun RemoteState.recentHomeSessions(limit: Int = 4): List<SessionCatalog
         }.thenBy { it.sessionId })
         .take(limit.coerceAtLeast(0))
 
-private fun RemoteState.orderHomeCards(cards: List<HomeRuntimeCard>): List<HomeRuntimeCard> {
+internal fun RemoteState.orderHomeCards(cards: List<HomeRuntimeCard>): List<HomeRuntimeCard> {
     val collator = java.text.Collator.getInstance(java.util.Locale.CHINA)
     return cards.sortedWith(compareByDescending<HomeRuntimeCard> { homeActivityAt(it.runtime) }
         .thenBy(collator) { it.title }.thenBy { it.runtime.runtimeId })
