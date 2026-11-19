@@ -122,6 +122,17 @@ internal data class RecentHomeProject(
     val sessionCount: Int,
 )
 
+/** Prefer Codex's native named projects; fill gaps with known working directories. */
+internal fun RemoteState.homeProjectPickerEntries(): List<RecentHomeProject> {
+    val native = nativeCodexProjects.filter { it.cwd.isNotBlank() && it.name.isNotBlank() }.map {
+        RecentHomeProject(it.cwd, it.name, it.recencyAt ?: 0L, 0)
+    }
+    val inferred = recentHomeProjects(limit = Int.MAX_VALUE)
+    return (native + inferred).distinctBy {
+        it.cwd.trimEnd('/', '\\').lowercase(java.util.Locale.ROOT)
+    }
+}
+
 /** Projects are Host-scoped, reused from known sessions/runtimes without browsing the filesystem. */
 internal fun RemoteState.recentHomeProjects(limit: Int = 6): List<RecentHomeProject> {
     val known = sessions.values.filter { it.archived != true && it.cwd.isNotBlank() }
