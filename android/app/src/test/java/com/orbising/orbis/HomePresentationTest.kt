@@ -155,4 +155,48 @@ class HomePresentationTest {
         assertFalse(f.state.copy(runtimes = f.state.runtimes + ("a" to replacement)).homeCardIsCurrent(card))
     }
 
+    @Test fun meaningfulActivityUsesRealTurnTimesButNotToolOnlyDeltas() {
+        val runtime = RuntimeSummary("runtime", "Codex", "C:/Projects/Orbis", "running", sessionId = "session")
+        val state = RemoteState(
+            sessions = mapOf("session" to SessionCatalogEntry("session", modifiedAt = 1_000L)),
+            conversations = mapOf("runtime" to RuntimeConversation(
+                messages = listOf(
+                    ChatMessage("user", "user", listOf(RemoteContent("text", "prompt")), 2_000L),
+                    ChatMessage("tool", "assistant", listOf(RemoteContent("tool_call", toolCallId = "call")),
+                        90_000L),
+                ),
+                turnTimings = mapOf("turn" to TurnTiming("turn", startedAt = 3_000L)),
+            )),
+        )
+        assertEquals(3_000L, state.homeActivityAt(runtime))
+        val completed = state.copy(conversations = mapOf("runtime" to
+            state.conversations.getValue("runtime").copy(turnTimings =
+                mapOf("turn" to TurnTiming("turn", startedAt = 3_000L, durationMs = 1_000L)))))
+        assertEquals(4_000L, completed.homeActivityAt(runtime))
+    }
+
+    @Test fun recentProjectPickerDeduplicatesFoldersAndUsesActiveSessions() {
+        val optics = """C:\\Work\\Optics"""
+        val zotero = """C:\\Work\\Zotero"""
+        val state = RemoteState(
+            sessions = mapOf(
+                "a" to SessionCatalogEntry("a", name = "Research", cwd = zotero, modifiedAt = 1_000L),
+                "b" to SessionCatalogEntry("b", name = "Reading", cwd = zotero, modifiedAt = 2_000L),
+                "c" to SessionCatalogEntry("c", name = "Orbis UI", cwd = optics, modifiedAt = 100L),
+                "archived" to SessionCatalogEntry("archived", cwd = "C:/Old", modifiedAt = 9_000L, archived = true),
+            ),
+            runtimes = mapOf("running" to RuntimeSummary(
+                "running", "Codex", optics, "running", sessionId = "c")),
+            conversations = mapOf("running" to RuntimeConversation(
+                turnTimings = mapOf("recent" to TurnTiming("recent", startedAt = 3_000L)))),
+        )
+        val projects = state.recentHomeProjects()
+        assertEquals(listOf("Optics", "Zotero"), projects.map { it.label })
+        assertEquals(1, projects.first().sessionCount)
+        assertEquals(2, projects.last().sessionCount)
+        assertEquals(listOf("c", "b", "a"), state.recentHomeSessions().map { it.sessionId })
+        assertEquals("Orbis", homeDirectoryLabel("C:/Projects/Orbis/"))
+        assertEquals("Zotero", homeDirectoryLabel(zotero))
+    }
+
 }
