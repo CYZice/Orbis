@@ -94,8 +94,16 @@ internal fun homeDirectoryLabel(cwd: String): String {
  * Tool progress/deltas intentionally do not move cards on every update.
  */
 internal fun RemoteState.homeActivityAt(runtime: RuntimeSummary): Long {
-    val catalogTime = sessions[runtime.sessionId]?.modifiedAt ?: 0L
-    val conversation = conversations[runtime.runtimeId] ?: return catalogTime
+    val entry = sessions[runtime.sessionId]
+    val catalogTime = entry?.modifiedAt ?: 0L
+    val conversation = conversations[runtime.runtimeId]
+    val latestTurnStart = conversation?.turnTimings?.values?.maxOfOrNull { it.startedAt } ?: 0L
+    // Follow Codex's native recent-activity order. Live turn starts compensate for
+    // catalog caching; tool output alone must not move a session up the list.
+    if (runtime.agentKind in setOf("codex", "codexDesktop") && entry?.recencyAt != null) {
+        return maxOf(entry.recencyAt, latestTurnStart)
+    }
+    if (conversation == null) return catalogTime
     val messageTime = conversation.messages.asReversed().firstOrNull { message ->
         message.role == "user" || message.role == "assistant" && message.content.any { part ->
             part.type == "text" && !part.text.isNullOrBlank()
@@ -127,7 +135,7 @@ internal fun RemoteState.recentHomeProjects(limit: Int = 6): List<RecentHomeProj
             cwd = cwd,
             label = homeDirectoryLabel(cwd),
             lastActivityAt = maxOf(
-                projectSessions.maxOfOrNull { it.modifiedAt } ?: 0L,
+                projectSessions.maxOfOrNull { it.recencyAt ?: it.modifiedAt } ?: 0L,
                 projectRuntimes.maxOfOrNull { homeActivityAt(it) } ?: 0L,
             ),
             sessionCount = projectSessions.size,
@@ -135,15 +143,6 @@ internal fun RemoteState.recentHomeProjects(limit: Int = 6): List<RecentHomeProj
     }.sortedWith(compareByDescending<RecentHomeProject> { it.lastActivityAt }.thenBy { it.label })
         .take(limit.coerceAtLeast(0))
 }
-
-/** Existing sessions are a separate quick-switch action, never confused with creating a new session. */
-internal fun RemoteState.recentHomeSessions(limit: Int = 4): List<SessionCatalogEntry> =
-    sessions.values.filter { it.archived != true && it.cwd.isNotBlank() }
-        .sortedWith(compareByDescending<SessionCatalogEntry> { session ->
-            maxOf(session.modifiedAt, runtimes.values.filter { it.sessionId == session.sessionId }
-                .maxOfOrNull { homeActivityAt(it) } ?: 0L)
-        }.thenBy { it.sessionId })
-        .take(limit.coerceAtLeast(0))
 
 internal fun RemoteState.orderHomeCards(cards: List<HomeRuntimeCard>): List<HomeRuntimeCard> {
     val collator = java.text.Collator.getInstance(java.util.Locale.CHINA)
