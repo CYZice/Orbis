@@ -1370,6 +1370,9 @@ export class CodexRuntime implements AgentBackend {
         const cwd = thread.cwd;
         const createdAt = toMillis(thread.createdAt);
         const modifiedAt = toMillis(thread.updatedAt);
+        // Native recency advances on turn start, unlike updatedAt (disk and tool writes).
+        // Older app-servers omit recencyAt, so the mobile client falls back safely.
+        const recencyAt = toMillis(thread.recencyAt);
         const name = codexSessionName(thread.name);
         const modelProvider = codexProviderId(thread.modelProvider);
         if (typeof id !== "string" || typeof cwd !== "string" || createdAt === undefined || modifiedAt === undefined) {
@@ -1385,6 +1388,7 @@ export class CodexRuntime implements AgentBackend {
             : {}),
           createdAt,
           modifiedAt,
+          ...(recencyAt === undefined ? {} : { recencyAt }),
           messageCount: Array.isArray(thread.turns) ? thread.turns.length : 0,
           agentKind: "codex",
           archived,
