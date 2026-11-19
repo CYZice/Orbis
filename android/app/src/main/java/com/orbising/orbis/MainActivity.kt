@@ -401,6 +401,7 @@ internal fun RemoteApp(
                             model.openSession(hostId, sessionId)
                         }
                     },
+                    autoProjectPicker = newSessionCwd == null,
                     onLoadConfiguration = model::loadSessionConfiguration, onSaveConfiguration = model::saveSessionConfiguration) { kind, cwd, text, origin, fieldOrigin ->
                     val submission = model.sendFirstSessionMessage(kind, cwd, text, newSessionHostId)
                     if (submission != null) {
