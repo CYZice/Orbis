@@ -197,6 +197,13 @@ class HomePresentationTest {
         assertEquals(listOf("c", "b", "a"), state.recentHomeSessions().map { it.sessionId })
         assertEquals("Orbis", homeDirectoryLabel("C:/Projects/Orbis/"))
         assertEquals("Zotero", homeDirectoryLabel(zotero))
+        val withSecondRuntime = state.copy(runtimes = state.runtimes + ("older" to RuntimeSummary(
+            "older", "Codex", zotero, "idle", sessionId = "b")))
+        val cards = listOf(
+            HomeRuntimeCard(withSecondRuntime.runtimes.getValue("older"), "Reading", false),
+            HomeRuntimeCard(withSecondRuntime.runtimes.getValue("running"), "Orbis UI", false),
+        )
+        assertEquals("running", withSecondRuntime.orderHomeCards(cards).first().runtime.runtimeId)
     }
 
 }
