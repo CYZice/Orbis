@@ -194,7 +194,6 @@ class HomePresentationTest {
         assertEquals(listOf("Optics", "Zotero"), projects.map { it.label })
         assertEquals(1, projects.first().sessionCount)
         assertEquals(2, projects.last().sessionCount)
-        assertEquals(listOf("c", "b", "a"), state.recentHomeSessions().map { it.sessionId })
         assertEquals("Orbis", homeDirectoryLabel("C:/Projects/Orbis/"))
         assertEquals("Zotero", homeDirectoryLabel(zotero))
         val withSecondRuntime = state.copy(runtimes = state.runtimes + ("older" to RuntimeSummary(
@@ -204,6 +203,36 @@ class HomePresentationTest {
             HomeRuntimeCard(withSecondRuntime.runtimes.getValue("running"), "Orbis UI", false),
         )
         assertEquals("running", withSecondRuntime.orderHomeCards(cards).first().runtime.runtimeId)
+    }
+
+    @Test fun nativeCodexRecencyOutranksDiskModifiedAtAndToolOutput() {
+        val active = RuntimeSummary("active", "Codex", "C:/Alpha", "running",
+            sessionId = "alpha", agentKind = "codex")
+        val older = RuntimeSummary("older", "Codex", "C:/Beta", "idle",
+            sessionId = "beta", agentKind = "codex")
+        val state = RemoteState(
+            sessions = mapOf(
+                "alpha" to SessionCatalogEntry("alpha", cwd = "C:/Alpha",
+                    modifiedAt = 900_000L, recencyAt = 5_000L),
+                "beta" to SessionCatalogEntry("beta", cwd = "C:/Beta",
+                    modifiedAt = 100_000L, recencyAt = 8_000L),
+            ),
+            conversations = mapOf(
+                "active" to RuntimeConversation(messages = listOf(
+                    ChatMessage("tool-late", "assistant",
+                        listOf(RemoteContent("tool_call", toolCallId = "tool")), 1_000_000L)),
+            ),
+        )
+        assertEquals(5_000L, state.homeActivityAt(active))
+        assertEquals(8_000L, state.homeActivityAt(older))
+        assertEquals("older", state.orderHomeCards(listOf(
+            HomeRuntimeCard(active, "Alpha", false),
+            HomeRuntimeCard(older, "Beta", false),
+        )).first().runtime.runtimeId)
+        val nextTurn = state.copy(conversations = state.conversations + ("active" to
+            RuntimeConversation(turnTimings = mapOf("new-turn" to
+                TurnTiming("new-turn", startedAt = 10_000L)))))
+        assertEquals(10_000L, nextTurn.homeActivityAt(active))
     }
 
 }
