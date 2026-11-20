@@ -237,7 +237,7 @@ class HomePresentationTest {
                 "active" to RuntimeConversation(messages = listOf(
                     ChatMessage("tool-late", "assistant",
                         listOf(RemoteContent("tool_call", toolCallId = "tool")), 1_000_000L)),
-            ),
+            )),
         )
         assertEquals(5_000L, state.homeActivityAt(active))
         assertEquals(8_000L, state.homeActivityAt(older))
