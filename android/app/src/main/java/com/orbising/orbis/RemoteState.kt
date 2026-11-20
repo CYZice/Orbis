@@ -531,12 +531,20 @@ data class SessionActivationInfo(
     val at: Long = System.currentTimeMillis(),
 )
 
+@Serializable
+data class NativeCodexProject(
+    val cwd: String,
+    val name: String,
+    val recencyAt: Long? = null,
+)
+
 data class RemoteState(
     val notificationEpoch: String? = null,
     val notificationProjections: Map<String, NoticeProjection> = emptyMap(),
     val notificationReceipts: Map<String, Long> = emptyMap(),
     val connection: RelayConnection = RelayConnection.OFFLINE,
     val sessions: Map<String, SessionCatalogEntry> = emptyMap(),
+    val nativeCodexProjects: List<NativeCodexProject> = emptyList(),
     val deviceId: String? = null,
     /**
      * 已配对 Host 在 runtime 空间里的身份（spec §9.4）。
@@ -815,6 +823,7 @@ internal fun mergeSessionCatalogEntry(
         firstMessage = incoming.firstMessage ?: existing.firstMessage,
         createdAt = if (incoming.createdAt > 0) incoming.createdAt else existing.createdAt,
         modifiedAt = maxOf(existing.modifiedAt, incoming.modifiedAt),
+        recencyAt = listOfNotNull(existing.recencyAt, incoming.recencyAt).maxOrNull(),
         messageCount = maxOf(existing.messageCount, incoming.messageCount),
         hasHistoryCache = existing.hasHistoryCache || incoming.hasHistoryCache,
         hostname = incoming.hostname?.takeIf(String::isNotBlank) ?: existing.hostname,
@@ -832,8 +841,13 @@ private fun reduceSessionListResult(state: RemoteState, message: JsonObject): Re
     val requestId = message["requestId"]?.jsonPrimitive?.contentOrNull ?: return state
     if (requestId !in state.sessionListRequests) return state
     // Directory contents are mirrored from HostState.catalog; this is a device read receipt.
+    // Project roots are optional: older Hosts still use the inferred session-directory list.
+    val nativeProjects = message["nativeProjects"]?.let { payload ->
+        runCatching { sessionMessageJson.decodeFromJsonElement<List<NativeCodexProject>>(payload) }.getOrNull()
+    }.orEmpty()
     return state.copy(sessionListRequests = state.sessionListRequests - requestId,
-        sessionListRequestEpochs = state.sessionListRequestEpochs - requestId)
+        sessionListRequestEpochs = state.sessionListRequestEpochs - requestId,
+        nativeCodexProjects = nativeProjects)
 }
 
 private fun reduceSessionArchiveChanged(state: RemoteState, message: JsonObject): RemoteState {

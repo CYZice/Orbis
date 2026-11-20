@@ -33,6 +33,8 @@ data class SessionCatalogEntry(
     val modelProvider: String? = null,
     /** Client-local Pi label: captured once, persisted without loading the transcript again. */
     val cachedDisplayName: String? = null,
+    /** Native Codex activity timestamp, if supplied by thread/list. */
+    val recencyAt: Long? = null,
 )
 
 /** Loading history must not erase the host supplied by the session directory. */

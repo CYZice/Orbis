@@ -63,6 +63,7 @@ internal class SessionDraftStore {
 internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: String?,
     onBrowse: (String?) -> Unit, onBrowseInto: (String) -> Unit, onBrowseUp: () -> Unit,
     onCancel: () -> Unit = {}, drafts: SessionDraftStore? = null,
+    autoProjectPicker: Boolean = false,
     onLoadConfiguration: (String, String) -> Unit = { _, _ -> },
     onSaveConfiguration: (SessionConfigurationValues) -> Unit = {},
     onSubmit: (String, String, String, Rect, Rect) -> Boolean) {
@@ -74,6 +75,8 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
     var fieldValue by draft.editing
     LaunchedEffect(text) { if (fieldValue.text != text) fieldValue = TextFieldValue(text, selection = TextRange(text.length)) }
     var directoryOpen by rememberSaveable { mutableStateOf(false) }
+    var browsingFolders by rememberSaveable { mutableStateOf(false) }
+    var projectSearch by rememberSaveable { mutableStateOf("") }
     var agentMenu by remember { mutableStateOf<String?>(null) }
     var pressed by remember { mutableStateOf(true) }
     val appearance = remember { Animatable(0f) }
@@ -98,12 +101,17 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
     fun versionsAvailable(of: String) = agentVariants(of).size > 1 && agentVariants(of).all { supported?.contains(it) == true }
     LaunchedEffect(open) {
         if (open) {
+            if (autoProjectPicker && state.homeProjectPickerEntries().isNotEmpty()) {
+                browsingFolders = false
+                projectSearch = ""
+                directoryOpen = true
+            }
             pressed = true; appearance.snapTo(0f)
             delay(InteractionMotion.duration(200).toLong())
             pressed = false
             delay(InteractionMotion.duration(120).toLong())
             appearance.animateTo(1f, tween(InteractionMotion.duration(InteractionMotion.State)))
-            focus.requestFocus()
+            if (!directoryOpen) focus.requestFocus()
         } else {
             appearance.animateTo(0f, tween(InteractionMotion.duration(InteractionMotion.State)))
             pressed = true
@@ -181,7 +189,7 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
                     }
                 }
                 Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("draft-directory")
-                    .orbisKeyboardFocus().clickable(role = Role.Button) { directoryOpen = true; onBrowse(cwd.takeIf(String::isNotBlank)) },
+                    .orbisKeyboardFocus().clickable(role = Role.Button) { browsingFolders = false; projectSearch = ""; directoryOpen = true },
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Icon(OrbisSymbols.Folder, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(cwd.ifBlank { L10n.tr("选择工作目录") }, Modifier.weight(1f), style = MaterialTheme.typography.labelMedium,
@@ -272,14 +280,66 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
                 enabled = state.e2eReady && config.requestId == null && proposedPermissions != config.values.permissions,
                 modifier = Modifier.fillMaxWidth().padding(16.dp).testTag("draft-permissions-apply"))
         }
-        if (directoryOpen) OrbisChoiceSheet(L10n.tr("工作目录"), { directoryOpen = false }) {
-            RemoteDirectoryBrowser(state.sessionBrowse, state.e2eReady, onBrowse, onBrowseInto, onBrowseUp,
-                modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp))
-            val browse = state.sessionBrowse
-            NeumorphActionButton(text = L10n.tr("使用此目录"), onClick = {
-                browse?.path?.takeIf(String::isNotBlank)?.let { cwd = it; directoryOpen = false }
-            }, enabled = browse != null && !browse.isLoading && browse.error == null && !browse.path.isNullOrBlank(),
-                modifier = Modifier.fillMaxWidth())
+        if (directoryOpen) OrbisChoiceSheet(
+            L10n.tr(if (browsingFolders) "工作目录" else "选择项目"),
+            { directoryOpen = false },
+        ) {
+            if (!browsingFolders) {
+                val allProjects = state.homeProjectPickerEntries()
+                val search = projectSearch.trim()
+                val matches = if (search.isEmpty()) allProjects else allProjects.filter { project ->
+                    project.label.contains(search, ignoreCase = true) ||
+                        project.cwd.contains(search, ignoreCase = true)
+                }
+                // Four rows on entry; never expand the entire project catalog into a long modal.
+                val visibleProjects = matches.take(if (search.isEmpty()) 4 else 6)
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = projectSearch,
+                        onValueChange = { projectSearch = it },
+                        modifier = Modifier.fillMaxWidth().testTag("draft-project-search"),
+                        label = { Text(L10n.tr("搜索项目")) },
+                        singleLine = true,
+                        maxLines = 1,
+                        colors = neumorphFieldColors(),
+                    )
+                    if (visibleProjects.isNotEmpty()) {
+                        Text(L10n.tr(if (search.isEmpty()) "最近使用的项目" else "搜索结果"),
+                            style = MaterialTheme.typography.titleSmall)
+                        visibleProjects.forEach { project ->
+                            NeumorphTextButton(
+                                text = project.label,
+                                onClick = { cwd = project.cwd; directoryOpen = false; focus.requestFocus() },
+                                filled = project.cwd == cwd,
+                                modifier = Modifier.fillMaxWidth().testTag("draft-recent-project"),
+                            )
+                        }
+                        if (matches.size > visibleProjects.size) {
+                            Text(L10n.tr("还有 {0} 个项目，请输入名称缩小范围", matches.size - visibleProjects.size),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    } else {
+                        Text(L10n.tr(if (search.isEmpty()) "暂无最近项目" else "没有找到匹配的项目"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    NeumorphTextButton(
+                        text = L10n.tr("浏览其他文件夹"),
+                        onClick = { browsingFolders = true; onBrowse(cwd.takeIf(String::isNotBlank)) },
+                        dismissOnClick = false,
+                        modifier = Modifier.fillMaxWidth().testTag("draft-browse-other-folders"),
+                    )
+                }
+            } else {
+                RemoteDirectoryBrowser(state.sessionBrowse, state.e2eReady, onBrowse, onBrowseInto, onBrowseUp,
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp))
+                val browse = state.sessionBrowse
+                NeumorphActionButton(text = L10n.tr("使用此目录"), onClick = {
+                    browse?.path?.takeIf(String::isNotBlank)?.let { cwd = it; directoryOpen = false }
+                }, enabled = browse != null && !browse.isLoading && browse.error == null && !browse.path.isNullOrBlank(),
+                    modifier = Modifier.fillMaxWidth())
+            }
         }
     }
 }

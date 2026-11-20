@@ -1,0 +1,98 @@
+name: Android feature signed release
+
+on:
+  push:
+    branches: [feat/android-compact-home-recent-projects-20261119]
+    paths:
+      - 'android/**'
+      - 'packages/host/**'
+      - 'packages/protocol/**'
+      - '.github/workflows/android-feature-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # 发版证书指纹。签名一变，已装用户就无法覆盖升级，所以产物证书不符直接失败，
+      # 而不是把一个"能装但升不上去"的 APK 交给发版流程。
+      ORBIS_RELEASE_CERT_SHA256: 1bac1a243db5655a906f148f4104fc744d4ae9cadf59c8b95a68ea63ac00ae6a
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.3'
+          cache-dependency-path: native/relayquic/go.sum
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+      - name: Install pinned native toolchain
+        run: sdkmanager 'ndk;27.2.12479018'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Restore pinned mobile tool binaries
+        uses: actions/cache@v4
+        with:
+          path: android/app/build/generated/relayquic/tools
+          key: gomobile-${{ runner.os }}-${{ runner.arch }}-go1.27.3-${{ hashFiles('scripts/build-relay-quic.py') }}
+      - name: Verify mobile tool cache invalidation
+        run: python3 -m unittest discover -s scripts -p 'test_mobile_toolchain.py'
+      - name: Unit tests
+        working-directory: android
+        run: sh ./gradlew --no-daemon -Pkotlin.compiler.execution.strategy=in-process --max-workers=2 :app:testDebugUnitTest
+      - name: Build signed release APK
+        working-directory: android
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ORBIS_RELEASE_KEYSTORE_BASE64 }}
+          # Gradle 把 ORG_GRADLE_PROJECT_* 映射成同名项目属性；密码不出现在命令行参数里。
+          ORG_GRADLE_PROJECT_ORBIS_RELEASE_STORE_PASSWORD: ${{ secrets.ORBIS_RELEASE_STORE_PASSWORD }}
+          ORG_GRADLE_PROJECT_ORBIS_RELEASE_KEY_ALIAS: ${{ secrets.ORBIS_RELEASE_KEY_ALIAS }}
+          ORG_GRADLE_PROJECT_ORBIS_RELEASE_KEY_PASSWORD: ${{ secrets.ORBIS_RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${KEYSTORE_BASE64:?缺少 secret ORBIS_RELEASE_KEYSTORE_BASE64}"
+          keystore="$RUNNER_TEMP/orbis-release.jks"
+          trap 'rm -f "$keystore"' EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$keystore"
+          ORG_GRADLE_PROJECT_ORBIS_RELEASE_STORE_FILE="$keystore" sh ./gradlew --no-daemon -Pkotlin.compiler.execution.strategy=in-process --max-workers=2 :app:assembleRelease
+      - name: Verify signature and stage artifact
+        run: |
+          set -euo pipefail
+          apk=android/app/build/outputs/apk/release/app-release.apk
+          build_tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "apksigner from $build_tools"
+          "$build_tools/apksigner" verify --print-certs "$apk" > "$RUNNER_TEMP/certs.txt"
+          # 行前缀随 build-tools 版本变化（`Signer #1 certificate …` / `V2 Signer: certificate …`），
+          # 只认指纹本身：所有签名者去重后必须恰好是一个、且等于发版证书。
+          digests=$(grep -oE 'certificate SHA-256 digest: [a-f0-9]{64}' "$RUNNER_TEMP/certs.txt" | awk '{print $NF}' | sort -u || true)
+          signers=$(printf '%s' "$digests" | grep -c . || true)
+          digest=$digests
+          if [ "$signers" != 1 ] || [ "$digest" != "$ORBIS_RELEASE_CERT_SHA256" ]; then
+            # 证书指纹是公开信息；打出来才看得出是签错了还是输出格式变了。
+            echo "Unexpected signing certificate: ${digest:-<none>} (signers=$signers)"
+            cat "$RUNNER_TEMP/certs.txt"
+            exit 1
+          fi
+          mkdir -p .artifacts/android
+          cp "$apk" .artifacts/android/orbis.apk
+          (cd .artifacts/android && sha256sum orbis.apk > orbis.apk.sha256)
+          cat .artifacts/android/orbis.apk.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Orbis-android-feature-release
+          if-no-files-found: error
+          path: |
+            .artifacts/android/orbis.apk
+            .artifacts/android/orbis.apk.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Orbis-android-feature-release-symbols
+          if-no-files-found: error
+          path: android/app/build/outputs/mapping/release/

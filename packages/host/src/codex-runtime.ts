@@ -1346,6 +1346,33 @@ export class CodexRuntime implements AgentBackend {
     throw new Error("Codex 启动配置尚未确认，首句未发送；请核对原会话");
   }
 
+  /** Native Codex Desktop projects, when supported by the installed app-server.
+   * Older binaries do not expose the experimental API; callers fall back to known cwds. */
+  async listProjects(): Promise<Array<{ cwd: string; name: string; recencyAt?: number }>> {
+    try {
+      const response = await this.#server.request("project/list",
+        { sortKey: "recencyAt", sortDirection: "desc", limit: 80 }) as {
+        data?: Array<{ name?: unknown; roots?: unknown; recencyAt?: unknown }>;
+      };
+      const projects: Array<{ cwd: string; name: string; recencyAt?: number }> = [];
+      for (const project of response.data ?? []) {
+        const name = typeof project.name === "string" ? project.name.trim() : "";
+        if (!name || name.length > 256 || !Array.isArray(project.roots)) continue;
+        const recencyAt = toMillis(project.recencyAt);
+        for (const root of project.roots) {
+          if (typeof root !== "object" || root === null || Array.isArray(root)) continue;
+          const path = (root as Record<string, unknown>).path;
+          if (typeof path !== "string" || path.length === 0 || path.length > 4096) continue;
+          projects.push({ cwd: path, name, ...(recencyAt === undefined ? {} : { recencyAt }) });
+        }
+      }
+      return projects.slice(0, 120);
+    } catch (error) {
+      this.#options.log?.(`Codex project/list 不可用，改用已知工作目录：${describeError(error)}`);
+      return [];
+    }
+  }
+
   /** Persistent thread catalog, with a rollout fallback when app-server discovery fails. */
   async catalog(archived = false): Promise<AgentSessionSummary[]> {
     if (isDesktopAppServer(this.#server)) {
@@ -1370,6 +1397,9 @@ export class CodexRuntime implements AgentBackend {
         const cwd = thread.cwd;
         const createdAt = toMillis(thread.createdAt);
         const modifiedAt = toMillis(thread.updatedAt);
+        // Native recency advances on turn start, unlike updatedAt (disk and tool writes).
+        // Older app-servers omit recencyAt, so the mobile client falls back safely.
+        const recencyAt = toMillis(thread.recencyAt);
         const name = codexSessionName(thread.name);
         const modelProvider = codexProviderId(thread.modelProvider);
         if (typeof id !== "string" || typeof cwd !== "string" || createdAt === undefined || modifiedAt === undefined) {
@@ -1385,6 +1415,7 @@ export class CodexRuntime implements AgentBackend {
             : {}),
           createdAt,
           modifiedAt,
+          ...(recencyAt === undefined ? {} : { recencyAt }),
           messageCount: Array.isArray(thread.turns) ? thread.turns.length : 0,
           agentKind: "codex",
           archived,
