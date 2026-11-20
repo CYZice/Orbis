@@ -7,20 +7,20 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MessagePresentationTest {
-    @Test fun boundedProseCardsKeepStableRowsWhenHistoryIsPrepended() {
+    @Test fun continuousAssistantReplyKeepsOneStableRowWhenHistoryIsPrepended() {
         fun text(index: Int) = ChatMessage("m$index", "assistant", listOf(RemoteContent("text", "message $index")), 1)
         val messages = (0 until 13).map(::text)
         val first = chatViewportItems(buildChatListItems(messages))
         val turns = first.filterIsInstance<ChatListItem.AssistantTurn>()
-        assertEquals(listOf(4, 4, 4, 1), turns.map { it.messages.size })
+        assertEquals(listOf(13), turns.map { it.messages.size })
         assertEquals(messages, turns.flatMap { it.messages })
         assertTrue(turns.all { it.copyMessages == it.messages })
         val prefixed = listOf(text(-2), text(-1)) + messages
         val next = chatViewportItems(buildChatListItems(prefixed, previous = first), first)
-        assertEquals(listOf("m-2") + first.map { it.key }, next.map { it.key })
+        assertEquals(listOf("m-2"), next.map { it.key })
         assertEquals(prefixed, next.filterIsInstance<ChatListItem.AssistantTurn>().flatMap { it.messages })
-        assertEquals(1, chatListItemIndexByMessageId(next)["m0"])
-        assertEquals(4, chatListItemIndexByMessageId(next)["m12"])
+        assertEquals(0, chatListItemIndexByMessageId(next)["m0"])
+        assertEquals(0, chatListItemIndexByMessageId(next)["m12"])
     }
 
     @Test
@@ -261,7 +261,7 @@ class MessagePresentationTest {
     }
 
     @Test
-    fun `separates assistant cards at actual turn timing boundaries`() {
+    fun `native turn timing does not split a continuous assistant reply`() {
         val firstAssistant = ChatMessage("a1", "assistant", listOf(RemoteContent("text", "第一轮")), 1)
         val toolResult = ChatMessage("t1", "tool", listOf(RemoteContent("text", "工具结果")), 2)
         val secondAssistant = ChatMessage("a2", "assistant", listOf(RemoteContent("text", "第二轮")), 3)
@@ -271,13 +271,7 @@ class MessagePresentationTest {
             turnIdsByMessageId = mapOf("a1" to "turn-1", "a2" to "turn-2"),
         )
 
-        assertEquals(
-            listOf(
-                ChatListItem.AssistantTurn(listOf(firstAssistant, toolResult)),
-                ChatListItem.AssistantTurn(listOf(secondAssistant)),
-            ),
-            items,
-        )
+        assertEquals(listOf(ChatListItem.AssistantTurn(listOf(firstAssistant, toolResult, secondAssistant))), items)
     }
 
     @Test

@@ -35,8 +35,8 @@ class UnifiedChatCardTest {
         }
         val result = rows(bundled)
         assertEquals(listOf(emptySet<String>(), emptySet(), setOf("bundled")), result.map { it.completedMessageIds })
-        assertEquals(2, assistantCardContent(result[0].messages).tools.size)
-        assertEquals(1, assistantCardContent(result[1].messages).tools.size)
+        assertEquals(2, assistantCardContent(result[0].messages).items.filterIsInstance<AssistantCardItem.ToolGroup>().sumOf { it.calls.size })
+        assertEquals(1, assistantCardContent(result[1].messages).items.filterIsInstance<AssistantCardItem.ToolGroup>().sumOf { it.calls.size })
     }
 
     // A large parallel batch stays one collapsed group with bounded local paging, not dozens of frames.
@@ -48,17 +48,16 @@ class UnifiedChatCardTest {
         val after = rows(listOf(packed), previous = before)
         assertEquals(1, after.size)
         assertEquals(before.single().key, after.single().key)
-        assertEquals(24, assistantCardContent(after.single().messages).tools.size)
+        assertEquals(24, assistantCardContent(after.single().messages).items.filterIsInstance<AssistantCardItem.ToolGroup>().sumOf { it.calls.size })
         assertEquals(8, CHAT_TOOL_PAGE_SIZE)
     }
 
-    // The prose budget is applied to blocks too; prepending history cannot move an existing row start.
-    @Test fun `prose boundaries survive prepend and native boundary changes`() {
+    @Test fun `content order survives packing and native boundary changes`() {
         val original = (0 until 9).map { text("m$it") }
         val before = rows(original)
-        assertEquals(listOf(4, 4, 1), before.map { it.messages.size })
+        assertEquals(listOf(9), before.map { it.messages.size })
         val after = rows(listOf(text("older0"), text("older1")) + original, previous = before)
-        assertEquals(listOf("older0") + before.map { it.key }, after.map { it.key })
+        assertEquals(listOf("older0"), after.map { it.key })
         assertEquals(signature(before), signature(rows(original, original.associate { it.messageId to "turn" })))
         val oneMessage = ChatMessage("packed", "assistant", original.flatMap { it.content }, 0)
         assertEquals(signature(before), signature(rows(listOf(oneMessage))))

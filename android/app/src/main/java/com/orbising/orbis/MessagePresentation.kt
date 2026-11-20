@@ -28,7 +28,6 @@ internal enum class ContentPresentation(val startsCollapsed: Boolean) {
     TOOL(true),
 }
 
-internal const val CHAT_CARD_PROSE_LIMIT = 4
 internal const val CHAT_TOOL_PAGE_SIZE = 8
 
 internal fun contentPresentation(role: String, contentType: String): ContentPresentation = when {
@@ -84,9 +83,8 @@ internal fun groupTurnTiming(timings: List<TurnTiming>): TurnTiming? {
 }
 
 /**
- * A step contains reasoning, text, then tools. New reasoning/text after tools starts
- * the next card, including when both steps were packed into one native message.
- * Source message IDs/content stay intact outside this local projection.
+ * A visible assistant reply is one row until the next user message. Native turn
+ * boundaries and prose length do not create extra visual cards.
  */
 @Suppress("UNUSED_PARAMETER")
 internal fun buildChatListItems(
@@ -102,9 +100,6 @@ internal fun buildChatListItems(
 ): List<ChatListItem> {
     val items = mutableListOf<ChatListItem>()
     var assistantMessages = mutableListOf<ChatMessage>()
-    var hasTools = false
-    var hasText = false
-    var proseCount = 0
     var cardKey: String? = null
     val completed = linkedSetOf<String>()
     val reusableUsers = previous.filterIsInstance<ChatListItem.UserMessage>().associateBy { it.message.messageId }
@@ -121,7 +116,7 @@ internal fun buildChatListItems(
             items += reused ?: ChatListItem.AssistantTurn(assistantMessages.toList(), key = key, completedMessageIds = completed.toSet())
             assistantMessages = mutableListOf()
         }
-        completed.clear(); cardKey = null; hasTools = false; hasText = false; proseCount = 0
+        completed.clear(); cardKey = null
     }
 
     fun partKey(message: ChatMessage, start: Int): String {
@@ -150,21 +145,7 @@ internal fun buildChatListItems(
             flushAssistantMessages()
             continue
         }
-        var start = 0
-        message.content.forEachIndexed { index, block ->
-            val tool = message.role == "tool" || block.type in setOf("tool_call", "toolCall")
-            if (!tool && block.artifact == null && block.text.isNullOrBlank()) return@forEachIndexed
-            val knownStart = partKey(message, index) in reusableTurns && (assistantMessages.isNotEmpty() || start < index)
-            if (knownStart || !tool && (hasTools || block.type == "thinking" && hasText || proseCount >= CHAT_CARD_PROSE_LIMIT)) {
-                if (start < index) append(message, start, index)
-                flushAssistantMessages()
-                start = index
-            }
-            if (tool) hasTools = true
-            else proseCount++
-            if (block.type == "text" && !tool && !block.text.isNullOrBlank()) hasText = true
-        }
-        append(message, start, message.content.size)
+        append(message, 0, message.content.size)
     }
     flushAssistantMessages()
     return items
@@ -174,20 +155,43 @@ internal data class ChatCardTool(val message: ChatMessage, val block: RemoteCont
     val key: String get() = block.toolCallId ?: "${message.messageId}:tool:$index"
 }
 
-internal data class AssistantCardContent(val prose: List<ChatMessage>, val tools: List<ChatCardTool>)
+internal sealed interface AssistantCardItem {
+    data class Message(val message: ChatMessage) : AssistantCardItem
+    data class ToolGroup(val calls: List<ChatCardTool>) : AssistantCardItem
+}
 
-/** Group tools across native message boundaries; the card grouper guarantees they are a tail. */
+internal data class AssistantCardContent(val items: List<AssistantCardItem>)
+
+/** Group only adjacent tool calls while preserving every other content block's position. */
 internal fun assistantCardContent(messages: List<ChatMessage>): AssistantCardContent {
-    val tools = mutableListOf<ChatCardTool>()
-    val prose = messages.mapNotNull { message ->
-        val content = message.content.filterIndexed { index, block ->
-            val tool = block.type in setOf("tool_call", "toolCall")
-            if (tool) tools += ChatCardTool(message, block, index)
-            !tool
+    val items = mutableListOf<AssistantCardItem>()
+    val pendingTools = mutableListOf<ChatCardTool>()
+    fun flushTools() {
+        if (pendingTools.isNotEmpty()) {
+            items += AssistantCardItem.ToolGroup(pendingTools.toList())
+            pendingTools.clear()
         }
-        if (content.isEmpty()) null else if (content.size == message.content.size) message else message.copy(content = content)
     }
-    return AssistantCardContent(prose, tools)
+    messages.forEach { message ->
+        var proseStart = 0
+        message.content.forEachIndexed { index, block ->
+            val tool = block.type in setOf("tool_call", "toolCall")
+            if (tool) {
+                if (proseStart < index) {
+                    flushTools()
+                    items += AssistantCardItem.Message(message.copy(content = message.content.subList(proseStart, index)))
+                }
+                pendingTools += ChatCardTool(message, block, index)
+                proseStart = index + 1
+            }
+        }
+        if (proseStart < message.content.size) {
+            flushTools()
+            items += AssistantCardItem.Message(message.copy(content = message.content.subList(proseStart, message.content.size)))
+        }
+    }
+    flushTools()
+    return AssistantCardContent(items)
 }
 
 /**
