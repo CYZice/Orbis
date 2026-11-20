@@ -61,7 +61,7 @@ internal fun ToolSummaryDisclosure(summary: ToolSummary, canRead: Boolean, onRea
                 Modifier.fillMaxWidth()
                     .semantics { contentDescription = L10n.tr("{0}{1}，{2}", if (expanded) L10n.tr("收起") else L10n.tr("展开"), summary.toolName, phase) }
                     .orbisKeyboardFocus().clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button) { glyphActivation++; expanded = !expanded }
-                    .heightIn(min = RemoteUi.TouchTarget),
+                    .heightIn(min = 40.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
