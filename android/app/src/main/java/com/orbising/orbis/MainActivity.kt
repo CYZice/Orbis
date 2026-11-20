@@ -217,6 +217,7 @@ import java.util.Date
 import java.util.Locale
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import coil.compose.AsyncImage
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.jsonObject
@@ -3877,23 +3878,27 @@ internal fun AssistantTurnCard(
                     }
                 }
             }
-            content.prose.forEach { message ->
-                key(runtimeId, message.messageId) {
-                    CompositionLocalProvider(LocalStreamingText provides (message.messageId in streamingMessageIds)) {
-                    AssistantTurnMessage(
-                        runtimeId = runtimeId,
-                        message = message,
-                        toolActivities = toolActivities,
-                        toolResults = toolResults,
-                        downloads = downloads,
-                        downloadArtifact = downloadArtifact,
-                        downloadFile = downloadFile,
-                    )
+            content.items.forEachIndexed { index, item ->
+                when (item) {
+                    is AssistantCardItem.Message -> key(runtimeId, "message:$index:${item.message.messageId}") {
+                        CompositionLocalProvider(LocalStreamingText provides (item.message.messageId in streamingMessageIds)) {
+                            AssistantTurnMessage(
+                                runtimeId = runtimeId,
+                                message = item.message,
+                                toolActivities = toolActivities,
+                                toolResults = toolResults,
+                                downloads = downloads,
+                                downloadArtifact = downloadArtifact,
+                                downloadFile = downloadFile,
+                            )
+                        }
+                    }
+                    is AssistantCardItem.ToolGroup -> key(runtimeId, "tools:$index:${item.calls.first().key}") {
+                        ChatToolGroup(runtimeId, item.calls, toolActivities, toolResults,
+                            downloads, downloadArtifact, downloadFile)
                     }
                 }
             }
-            if (content.tools.isNotEmpty()) ChatToolGroup(runtimeId, content.tools, toolActivities, toolResults,
-                downloads, downloadArtifact, downloadFile)
             turnTiming?.let { TurnDurationLabel(it, nowMs) }
             fileChanges()
         }
@@ -3988,7 +3993,12 @@ private fun MessageBlocks(
             if (block.type == "render") {
                 val action = block.messageFileAction()
                 if (action != null) {
-                    MessageReferenceCard(block, downloads.values.firstOrNull { it.sourcePath == action }, onDownload = { downloadFile(action) })
+                    val download = downloads.values.firstOrNull { it.sourcePath == action }
+                    if (isImageFileName(block.file?.fileName)) {
+                        ImageReferenceCard(block, download, onDownload = { downloadFile(action) })
+                    } else {
+                        MessageReferenceCard(block, download, onDownload = { downloadFile(action) })
+                    }
                 } else {
                     Text(block.messageRenderLabel(), color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelMedium, modifier = Modifier.testTag("message-content-placeholder"))
@@ -4024,6 +4034,50 @@ private fun MessageBlocks(
                     )
                 }
             }
+            }
+        }
+    }
+}
+
+private fun isImageFileName(name: String?): Boolean =
+    name?.matches(Regex(".*\\.(avif|bmp|gif|heic|jpe?g|png|tiff?|webp)$", RegexOption.IGNORE_CASE)) == true
+
+@Composable
+private fun ImageReferenceCard(block: RemoteContent, download: ArtifactDownload?, onDownload: () -> Unit) {
+    var enlarged by rememberSaveable(block.file?.referenceId) { mutableStateOf(false) }
+    val location = download?.savedLocation
+    val ready = download?.status == "completed" && location != null
+    NeumorphSurface(
+        onClick = { if (ready) enlarged = true else onDownload() },
+        enabled = ready || download?.status !in setOf("queued", "downloading"),
+        shape = RemoteUi.ControlShape,
+        modifier = Modifier.fillMaxWidth().testTag("message-image-preview"),
+    ) {
+        if (ready) {
+            AsyncImage(
+                model = location,
+                contentDescription = block.file?.fileName ?: L10n.tr("图片预览"),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp, max = 320.dp).padding(8.dp),
+                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+            )
+        } else {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(OrbisSymbols.AttachFile, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Text(block.file?.fileName ?: block.messageRenderLabel(), Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (download?.status in setOf("queued", "downloading")) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            }
+        }
+    }
+    if (enlarged && ready) {
+        androidx.compose.ui.window.Dialog(onDismissRequest = { enlarged = false }) {
+            Surface(shape = RemoteUi.ControlShape, color = MaterialTheme.colorScheme.surface) {
+                AsyncImage(
+                    model = location,
+                    contentDescription = block.file?.fileName ?: L10n.tr("图片预览"),
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 640.dp).padding(12.dp),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                )
             }
         }
     }
@@ -4161,7 +4215,7 @@ private fun CompactDisclosure(
         modifier = Modifier.fillMaxWidth(),
         contentInset = 12.dp,
     ) {
-        Row(Modifier.heightIn(min = 56.dp).padding(12.dp),
+        Row(Modifier.heightIn(min = 40.dp).padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = if (expanded || preview.isNotBlank()) Alignment.Top else Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(17.dp))
