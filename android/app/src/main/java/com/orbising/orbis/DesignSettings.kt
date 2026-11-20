@@ -69,6 +69,7 @@ internal fun DesignSettingsScreen(state: RemoteState, onBack: () -> Unit, root: 
                 SettingsRow(L10n.tr("语言"), if (AppLocalization.language == AppLanguage.Chinese) "简体中文" else "English",
                     "settings-language", onClick = { languageOpen = true })
             }
+            AppUpdateSettings()
         }
     }
     if (protocolOpen) ProtocolChoiceSheet(state.relayTransportMode, state.hostId != null, { protocolOpen = false }) {
@@ -85,7 +86,7 @@ internal fun DesignSettingsScreen(state: RemoteState, onBack: () -> Unit, root: 
 }
 
 @Composable
-private fun SettingsGroup(title: String, padding: androidx.compose.ui.unit.Dp = 16.dp,
+internal fun SettingsGroup(title: String, padding: androidx.compose.ui.unit.Dp = 16.dp,
     spacing: androidx.compose.ui.unit.Dp = 12.dp, tag: String = "", content: @Composable ColumnScope.() -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(title, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

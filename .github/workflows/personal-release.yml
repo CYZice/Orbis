@@ -1,0 +1,91 @@
+name: Publish personal client release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (for example v0.1.61)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: personal-release
+  cancel-in-progress: false
+
+jobs:
+  android:
+    uses: ./.github/workflows/android-build.yml
+    secrets: inherit
+
+  windows:
+    uses: ./.github/workflows/windows-host-build.yml
+    secrets: inherit
+
+  publish:
+    needs: [android, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Orbis-android
+          path: release/android
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: OrbisHost-windows-x64
+          path: release/windows
+
+      - name: Prepare fixed release asset names and metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then tag="${{ inputs.tag }}"; fi
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          version="${tag#v}"
+          gradle_version_code=$(grep -E '^[[:space:]]*versionCode[[:space:]]*=' android/app/build.gradle.kts | head -1 | sed -E 's/[^0-9]*([0-9]+).*/\1/')
+          gradle_version=$(grep -E '^[[:space:]]*versionName[[:space:]]*=' android/app/build.gradle.kts | head -1 | sed -E 's/.*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/')
+          cmake_version=$(sed -nE 's/^project\(OrbisHost VERSION ([0-9.]+).*$/\1/p' packages/windows-host/CMakeLists.txt)
+          [[ "$gradle_version" == "$version" ]] || { echo "Android version $gradle_version does not match $version"; exit 1; }
+          [[ "$cmake_version" == "$version" ]] || { echo "Host version $cmake_version does not match $version"; exit 1; }
+
+          apk=$(find release/android -type f -name orbis.apk | head -1)
+          apk_hash=$(awk '{print $1}' "$(find release/android -type f -name orbis.apk.sha256 | head -1)")
+          [[ -n "$apk" && "$apk_hash" =~ ^[a-f0-9]{64}$ ]]
+          cp "$apk" release/orbis.apk
+          printf '%s  orbis.apk\n' "$apk_hash" > release/orbis.apk.sha256
+          printf '{"version":"%s","versionCode":%s,"sha256":"%s"}\n' "$version" "$gradle_version_code" "$apk_hash" > release/orbis.apk.version.json
+
+          find release/windows -type f -name "OrbisHost-${version}-windows-x64-setup.exe" -exec cp {} release/ \;
+          find release/windows -type f -name "OrbisHost-${version}-windows-x64-setup.exe.sha256" -exec cp {} release/ \;
+          find release/windows -type f -name "OrbisHost-${version}-windows-x64.zip" -exec cp {} release/ \;
+          find release/windows -type f -name "OrbisHost-${version}-windows-x64.zip.sha256" -exec cp {} release/ \;
+          test -f "release/OrbisHost-${version}-windows-x64-setup.exe"
+          test -f "release/OrbisHost-${version}-windows-x64-setup.exe.sha256"
+          test -f "release/OrbisHost-${version}-windows-x64.zip"
+          test -f "release/OrbisHost-${version}-windows-x64.zip.sha256"
+
+      - name: Create or update personal GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then tag="${{ inputs.tag }}"; fi
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "Orbis $tag" --generate-notes
+          gh release upload "$tag" release/orbis.apk release/orbis.apk.sha256 release/orbis.apk.version.json \
+            release/OrbisHost-*-windows-x64-setup.exe release/OrbisHost-*-windows-x64-setup.exe.sha256 \
+            release/OrbisHost-*-windows-x64.zip release/OrbisHost-*-windows-x64.zip.sha256 --clobber
+          gh release edit "$tag" --draft=false --latest

@@ -1123,8 +1123,9 @@ void HostController::checkUpdatesInternal(bool announce) {
         if (announce) setMessage("测试版通过 QA 更新");
         return;
     }
-    const QUrl siteUrl("https://orbising.com/v1/site");
-    QNetworkRequest request(siteUrl); request.setRawHeader("User-Agent", "OrbisHost/" ORBIS_VERSION); request.setTransferTimeout(15000);
+    const QUrl releaseUrl("https://api.github.com/repos/CYZice/Orbis/releases/latest");
+    QNetworkRequest request(releaseUrl); request.setRawHeader("Accept", "application/vnd.github+json");
+    request.setRawHeader("User-Agent", "OrbisHost/" ORBIS_VERSION); request.setTransferTimeout(15000);
     auto *reply = m_network.get(request);
     connect(reply, &QNetworkReply::finished, this, [this, reply, announce] {
         const auto payload = reply->readAll();
@@ -1135,37 +1136,58 @@ void HostController::checkUpdatesInternal(bool announce) {
             if (announce) setMessage("暂时无法获取公开版本信息，请在下载页查看发布状态");
         }
         else {
-            m_androidLatestVersion = result.value("androidVersion").toString();
-            m_androidLatestVersionCode = result.value("androidVersionCode").toInt();
+            m_androidLatestVersion.clear();
+            m_androidLatestVersionCode = 0;
             refreshDeviceUpdateIndicators();
-            auto tag = result.value("version").toString(); if (tag.startsWith('v')) tag.remove(0, 1);
-            QString installerUrl, checksumUrl;
-#ifdef Q_OS_MACOS
-            const auto releaseFiles = result.value("macos").toArray();
-#if defined(Q_PROCESSOR_ARM_64)
-            const QString suffix = "-macos-arm64.dmg";
-#else
-            const QString suffix = "-macos-x64.dmg";
-#endif
-            // macOS versions are independent of the Windows updater's version field.
-            tag.clear();
-            for (const auto &fileValue : releaseFiles) {
-                const auto name = fileValue.toObject().value("name").toString();
-                if (!name.startsWith("OrbisHost-") || !name.endsWith(suffix)) continue;
-                const auto candidate = name.mid(10, name.size() - 10 - suffix.size());
-                if (QVersionNumber::fromString(candidate) > QVersionNumber::fromString(tag)) tag = candidate;
+            auto tag = result.value("tag_name").toString(); if (tag.startsWith('v')) tag.remove(0, 1);
+            if (result.value("draft").toBool() || result.value("prerelease").toBool() || tag.isEmpty()) {
+                if (announce) setMessage("当前没有可用的正式版本");
+                reply->deleteLater(); emit changed(); return;
             }
-            const auto expectedName = QString("OrbisHost-%1%2").arg(tag, suffix);
+            QString installerUrl, checksumUrl;
+            const auto releaseFiles = result.value("assets").toArray();
+#ifdef Q_OS_MACOS
+            const auto expectedName = QString("OrbisHost-%1-macos-%2.dmg").arg(tag,
+#if defined(Q_PROCESSOR_ARM_64)
+                "arm64"
 #else
-            const auto releaseFiles = result.value("windows").toArray();
+                "x64"
+#endif
+            );
+#else
             const auto expectedName = QString("OrbisHost-%1-windows-x64-setup.exe").arg(tag);
 #endif
             for (const auto &fileValue : releaseFiles) {
                 const auto file = fileValue.toObject();
                 if (file.value("name").toString() != expectedName) continue;
-                const QUrl base("https://orbising.com/");
-                installerUrl = base.resolved(QUrl(file.value("url").toString())).toString();
-                checksumUrl = base.resolved(QUrl(file.value("checksumUrl").toString())).toString();
+                installerUrl = file.value("browser_download_url").toString();
+                for (const auto &checksumValue : releaseFiles) {
+                    const auto checksum = checksumValue.toObject();
+                    if (checksum.value("name").toString() == expectedName + ".sha256") {
+                        checksumUrl = checksum.value("browser_download_url").toString(); break;
+                    }
+                }
+                break;
+            }
+            for (const auto &fileValue : releaseFiles) {
+                const auto file = fileValue.toObject();
+                if (file.value("name").toString() != "orbis.apk.version.json") continue;
+                const auto metadataUrl = file.value("browser_download_url").toString();
+                if (metadataUrl.isEmpty()) break;
+                QNetworkRequest metadataRequest{QUrl(metadataUrl)};
+                metadataRequest.setRawHeader("Accept", "application/json");
+                metadataRequest.setRawHeader("User-Agent", "OrbisHost/" ORBIS_VERSION);
+                metadataRequest.setTransferTimeout(15000);
+                auto *metadataReply = m_network.get(metadataRequest);
+                connect(metadataReply, &QNetworkReply::finished, this, [this, metadataReply] {
+                    const auto metadata = QJsonDocument::fromJson(metadataReply->readAll()).object();
+                    if (metadataReply->error() == QNetworkReply::NoError && metadata.value("version").isString()) {
+                        m_androidLatestVersion = metadata.value("version").toString();
+                        m_androidLatestVersionCode = metadata.value("versionCode").toInt();
+                        refreshDeviceUpdateIndicators(); emit changed();
+                    }
+                    metadataReply->deleteLater();
+                });
                 break;
             }
             if (QVersionNumber::fromString(tag) > QVersionNumber::fromString(version()) && !installerUrl.isEmpty() && !checksumUrl.isEmpty()) {
