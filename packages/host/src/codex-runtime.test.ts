@@ -226,7 +226,7 @@ it("shows the same-turn Codex review reply exactly once in live and replay", asy
   expect(syncHistory(replay)?.entries.map(e => e.entryId)).toEqual(["review-reply"]);
 });
 
-// MSG-RENDER-01: native media stays in source order without sending data or native paths.
+// MSG-RENDER-01: native media stays in source order without sending binary data.
 it("preserves Codex user media, generated images, and public reasoning summaries", async () => {
   const h = makeHarness(); await activate(h);
   const route = { threadId: "th-1", turnId: "media-turn" };
@@ -241,7 +241,7 @@ it("preserves Codex user media, generated images, and public reasoning summaries
   for (const item of items) h.notify("item/completed", { ...route, item });
   const live = h.events.filter(e => e.type === "message.finished").map(e => e.message.content);
   expect(live).toEqual([
-    [{ type: "text", text: "Before" }, { type: "render", renderKind: "image", text: "图片内容暂不可显示" },
+    [{ type: "text", text: "Before" }, { type: "render", renderKind: "image", text: "private.png", sourcePath: "private.png" },
       { type: "text", text: "After" }, { type: "render", renderKind: "audio", text: "音频内容暂不可显示" }],
     [{ type: "render", renderKind: "codex_generated_image", text: "生成图片暂不可显示" }],
     [{ type: "render", renderKind: "codex_generated_image", text: "图片生成失败" }],
@@ -254,7 +254,7 @@ it("preserves Codex user media, generated images, and public reasoning summaries
   await activate(replay);
   expect(syncHistory(replay)?.display?.entries.map(e => e.message?.content)).toEqual(live);
   expect(replay.runtime.generatedImagePath(runtimeId, "generated")).toBe(path);
-  expect(JSON.stringify(syncHistory(replay))).not.toMatch(/private|result\.png/);
+  expect(JSON.stringify(syncHistory(replay))).not.toMatch(/result\.png/);
 });
 
 // Child lifecycles belong to execution.tasks for both native transports; main input stays independent.
@@ -1940,7 +1940,7 @@ describe("CodexRuntime", () => {
     expect(statuses.at(-1)).toMatchObject({ status: "idle" });
   });
 
-  it("user_message attachments are included in the Codex text input", async () => {
+  it("user_message image attachments use native Codex image input", async () => {
     const h = makeHarness();
     await activate(h);
 
@@ -1953,10 +1953,8 @@ describe("CodexRuntime", () => {
     await vi.waitFor(() => {
       expect(h.requests).toHaveBeenCalledWith("turn/start", {
         threadId: "th-1",
-        input: [{
-          type: "text",
-          text: "请检查这些文件\n\n附件路径：\nC:\\work\\report.txt\nC:\\work\\screenshot.png",
-        }],
+        input: [{ type: "text", text: "请检查这些文件\n\n附件路径：\nC:\\work\\report.txt" },
+          { type: "localImage", path: "C:\\work\\screenshot.png" }],
         clientUserMessageId: "with-files",
       });
     });
@@ -3755,7 +3753,9 @@ describe("Codex all-state input lifecycle (AIN-04)", () => {
     expect(queued(h, "phone").at(-1)).toMatchObject({ state: "accepted", delivery: "followUp" });
     completeCompact(h);
     await vi.waitFor(() => expect(startCalls(h)).toHaveLength(1));
-    expect(startCalls(h)[0]?.[1]).toMatchObject({ clientUserMessageId: "phone", input: [{ type: "text", text: "with file\n\n附件路径：\n/tmp/input.png" }] });
+    expect(startCalls(h)[0]?.[1]).toMatchObject({ clientUserMessageId: "phone", input: [
+      { type: "text", text: "with file" }, { type: "localImage", path: "/tmp/input.png" },
+    ] });
     expect(queued(h, "phone").at(-1)?.state).toBe("accepted");
     h.resolveNext({ turn: { id: "next" } });
     await vi.waitFor(() => expect(queued(h, "phone").at(-1)?.state).toBe("delivered"));

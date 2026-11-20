@@ -16,6 +16,21 @@ function renderer() {
   };
 }
 
+it("projects Codex local images to a Host-issued file reference", () => {
+  const files = new MessageFileReferences();
+  const render = (event: RuntimeEvent) => new DeviceMessageRendering(files).project("device", {
+    type: "runtime.event", runtimeId: "codex:thread", event,
+  }, { rich: true, codex: true, cwd: process.cwd() });
+  const event = { type: "message.finished" as const, message: {
+    messageId: "user-image", role: "user" as const, timestamp: 1,
+    content: [{ type: "render" as const, renderKind: "image", text: "shot.png", sourcePath: "package.json" }],
+  } } satisfies RuntimeEvent;
+  const projected = render(event) as { event: RuntimeEvent };
+  expect(projected.event).toMatchObject({ message: { content: [{ type: "render", renderKind: "file_reference", file: {
+    fileName: "shot.png", referenceId: expect.stringMatching(/^orbis-message-file:/),
+  } }] } });
+});
+
 describe("MSG-RENDER-01 device message rendering", () => {
   it("gates rich blocks and does not treat another backend's Markdown as a Codex directive", () => {
     const render = renderer(), event = { type: "message.finished", message: assistant() } as const;

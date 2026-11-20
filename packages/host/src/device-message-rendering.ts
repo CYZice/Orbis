@@ -53,7 +53,17 @@ export class DeviceMessageRendering {
     const runtimeId = String(envelope.runtimeId);
     const resolve = (path: string) => options.rich ? this.#files.register(path, options.cwd, deviceId, runtimeId) : undefined;
     const project = (value: ChatMessage, streaming = false): ChatMessage => {
-      const normalized = options.codex ? normalizeCodexMessage(value, resolve, streaming) : value;
+      let normalized = options.codex ? normalizeCodexMessage(value, resolve, streaming) : value;
+      if (options.rich && !streaming) {
+        normalized = { ...normalized, content: normalized.content.map(block => {
+          if (block.type !== "render" || block.renderKind !== "image" || block.sourcePath === undefined) return block;
+          const name = block.text.split(/[\\/]/u).at(-1) || "image";
+          const file = resolve(block.sourcePath);
+          return file === undefined ? { type: "render", renderKind: "image", text: "图片不可用" }
+            : { type: "render", renderKind: "file_reference", purpose: "output", text: name,
+              file: { fileName: name, referenceId: file.referenceId } };
+        }) };
+      }
       if (!options.rich) return downgradeMessageForLegacy(normalized);
       if (streaming || !options.generatedImagePath || !normalized.content.some(block => block.type === "render" && block.renderKind === "codex_generated_image")) return normalized;
       const path = options.generatedImagePath(normalized.messageId);

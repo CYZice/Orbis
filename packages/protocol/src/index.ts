@@ -544,6 +544,8 @@ export const RemoteContentSchema = z.discriminatedUnion("type", [
     text: z.string().max(4_096),
     /** File actions use a Host-issued identifier. Unknown kinds ignore the action. */
     file: MessageFileReferenceSchema.optional(),
+    /** Host-only canonical source for image projection; DeviceMessageRendering replaces it with `file`. */
+    sourcePath: z.string().min(1).max(4096).optional(),
     purpose: z.literal("output").optional(),
   }),
 ]);

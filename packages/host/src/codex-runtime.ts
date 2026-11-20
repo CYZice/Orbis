@@ -195,14 +195,16 @@ type QueuedTurn = {
   interruptOnNextTurn?: boolean;
 };
 
-/**
- * Codex app-server currently accepts text input for a turn. Keep the uploaded
- * files explicit in that text so Codex can inspect the paths on the computer.
- */
-function codexPromptText(text: string, attachments?: readonly string[]): string {
-  return attachments === undefined || attachments.length === 0
-    ? text
-    : `${text}\n\n附件路径：\n${attachments.join("\n")}`;
+function isImagePath(path: string): boolean {
+  return /\.(?:avif|bmp|gif|heic|jpeg|jpg|png|tif|tiff|webp)$/iu.test(path);
+}
+
+function codexPromptInput(text: string, attachments?: readonly string[]): unknown[] {
+  const files = attachments ?? [];
+  const images = files.filter(isImagePath);
+  const otherFiles = files.filter(path => !isImagePath(path));
+  const prompt = otherFiles.length === 0 ? text : `${text}\n\n附件路径：\n${otherFiles.join("\n")}`;
+  return [{ type: "text", text: prompt }, ...images.map(path => ({ type: "localImage", path }))];
 }
 
 type PersistedMessageMapping = {
@@ -3266,7 +3268,7 @@ export class CodexRuntime implements AgentBackend {
   ): Promise<void> {
     return this.#startTurnWithInput(
       thread,
-      [{ type: "text", text: codexPromptText(text, attachments) }],
+      codexPromptInput(text, attachments),
       clientUserMessageId,
     );
   }
@@ -4941,7 +4943,11 @@ function codexUserContent(item: Record<string, unknown>): RemoteContent[] {
     switch (part.type) {
       case "text": case "Text": case "output_text":
         return typeof part.text === "string" && part.text.length ? [{ type: "text", text: codexQuestionReplyText(part.text) }] : [];
-      case "image": case "localImage": return [{ type: "render", renderKind: "image", text: "图片内容暂不可显示" }];
+      case "image": case "localImage": {
+        const path = typeof part.path === "string" ? part.path : typeof part.localPath === "string" ? part.localPath : undefined;
+        const fileName = path?.split(/[\\/]/u).at(-1);
+        return [{ type: "render", renderKind: "image", text: fileName || "图片", ...(path === undefined ? {} : { sourcePath: path }) }];
+      }
       case "audio": case "localAudio": return [{ type: "render", renderKind: "audio", text: "音频内容暂不可显示" }];
       default: return []; // Skill/mention items bind existing user text.
     }
