@@ -155,4 +155,100 @@ class HomePresentationTest {
         assertFalse(f.state.copy(runtimes = f.state.runtimes + ("a" to replacement)).homeCardIsCurrent(card))
     }
 
+    @Test fun meaningfulActivityUsesRealTurnTimesButNotToolOnlyDeltas() {
+        val runtime = RuntimeSummary("runtime", "Codex", "C:/Projects/Orbis", "running", sessionId = "session")
+        val state = RemoteState(
+            sessions = mapOf("session" to SessionCatalogEntry("session", modifiedAt = 1_000L)),
+            conversations = mapOf("runtime" to RuntimeConversation(
+                messages = listOf(
+                    ChatMessage("user", "user", listOf(RemoteContent("text", "prompt")), 2_000L),
+                    ChatMessage("tool", "assistant", listOf(RemoteContent("tool_call", toolCallId = "call")),
+                        90_000L),
+                ),
+                turnTimings = mapOf("turn" to TurnTiming("turn", startedAt = 3_000L)),
+            )),
+        )
+        assertEquals(3_000L, state.homeActivityAt(runtime))
+        val completed = state.copy(conversations = mapOf("runtime" to
+            state.conversations.getValue("runtime").copy(turnTimings =
+                mapOf("turn" to TurnTiming("turn", startedAt = 3_000L, durationMs = 1_000L)))))
+        assertEquals(4_000L, completed.homeActivityAt(runtime))
+    }
+
+    @Test fun recentProjectPickerDeduplicatesFoldersAndUsesActiveSessions() {
+        val optics = """C:\\Work\\Optics"""
+        val zotero = """C:\\Work\\Zotero"""
+        val state = RemoteState(
+            sessions = mapOf(
+                "a" to SessionCatalogEntry("a", name = "Research", cwd = zotero, modifiedAt = 1_000L),
+                "b" to SessionCatalogEntry("b", name = "Reading", cwd = zotero, modifiedAt = 2_000L),
+                "c" to SessionCatalogEntry("c", name = "Orbis UI", cwd = optics, modifiedAt = 100L),
+                "archived" to SessionCatalogEntry("archived", cwd = "C:/Old", modifiedAt = 9_000L, archived = true),
+            ),
+            runtimes = mapOf("running" to RuntimeSummary(
+                "running", "Codex", optics, "running", sessionId = "c")),
+            conversations = mapOf("running" to RuntimeConversation(
+                turnTimings = mapOf("recent" to TurnTiming("recent", startedAt = 3_000L)))),
+        )
+        val projects = state.recentHomeProjects()
+        assertEquals(listOf("Optics", "Zotero"), projects.map { it.label })
+        assertEquals(1, projects.first().sessionCount)
+        assertEquals(2, projects.last().sessionCount)
+        assertEquals("Orbis", homeDirectoryLabel("C:/Projects/Orbis/"))
+        assertEquals("Zotero", homeDirectoryLabel(zotero))
+        val withSecondRuntime = state.copy(runtimes = state.runtimes + ("older" to RuntimeSummary(
+            "older", "Codex", zotero, "idle", sessionId = "b")))
+        val cards = listOf(
+            HomeRuntimeCard(withSecondRuntime.runtimes.getValue("older"), "Reading", false),
+            HomeRuntimeCard(withSecondRuntime.runtimes.getValue("running"), "Orbis UI", false),
+        )
+        assertEquals("running", withSecondRuntime.orderHomeCards(cards).first().runtime.runtimeId)
+    }
+
+    @Test fun nativeProjectsTakePrecedenceWithoutHidingKnownFolders() {
+        val native = NativeCodexProject("C:/Research/Optics", "Optics PIC", recencyAt = 10_000L)
+        val state = RemoteState(
+            nativeCodexProjects = listOf(native),
+            sessions = mapOf(
+                "a" to SessionCatalogEntry("a", cwd = "C:/Research/Optics", modifiedAt = 1_000L),
+                "b" to SessionCatalogEntry("b", cwd = "C:/Research/Zotero", modifiedAt = 2_000L),
+            ),
+        )
+        val projects = state.homeProjectPickerEntries()
+        assertEquals(2, projects.size)
+        assertEquals(listOf("Optics PIC", "Zotero"), projects.map { it.label })
+        assertEquals("C:/Research/Optics", projects[0].cwd)
+        assertEquals(10_000L, projects[0].lastActivityAt)
+    }
+
+    @Test fun nativeCodexRecencyOutranksDiskModifiedAtAndToolOutput() {
+        val active = RuntimeSummary("active", "Codex", "C:/Alpha", "running",
+            sessionId = "alpha", agentKind = "codex")
+        val older = RuntimeSummary("older", "Codex", "C:/Beta", "idle",
+            sessionId = "beta", agentKind = "codex")
+        val state = RemoteState(
+            sessions = mapOf(
+                "alpha" to SessionCatalogEntry("alpha", cwd = "C:/Alpha",
+                    modifiedAt = 900_000L, recencyAt = 5_000L),
+                "beta" to SessionCatalogEntry("beta", cwd = "C:/Beta",
+                    modifiedAt = 100_000L, recencyAt = 8_000L),
+            ),
+            conversations = mapOf(
+                "active" to RuntimeConversation(messages = listOf(
+                    ChatMessage("tool-late", "assistant",
+                        listOf(RemoteContent("tool_call", toolCallId = "tool")), 1_000_000L)),
+            )),
+        )
+        assertEquals(5_000L, state.homeActivityAt(active))
+        assertEquals(8_000L, state.homeActivityAt(older))
+        assertEquals("older", state.orderHomeCards(listOf(
+            HomeRuntimeCard(active, "Alpha", false),
+            HomeRuntimeCard(older, "Beta", false),
+        )).first().runtime.runtimeId)
+        val nextTurn = state.copy(conversations = state.conversations + ("active" to
+            RuntimeConversation(turnTimings = mapOf("new-turn" to
+                TurnTiming("new-turn", startedAt = 10_000L)))))
+        assertEquals(10_000L, nextTurn.homeActivityAt(active))
+    }
+
 }

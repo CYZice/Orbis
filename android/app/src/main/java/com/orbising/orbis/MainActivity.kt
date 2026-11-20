@@ -394,6 +394,7 @@ internal fun RemoteApp(
                 },
                 draftContent = { open -> SessionDraftCard(state, open, newSessionCwd,
                     model::browseSessions, model::browseInto, model::browseUp, onCancel = ::closeSessionDraft, drafts = sessionDrafts,
+                    autoProjectPicker = newSessionCwd == null,
                     onLoadConfiguration = model::loadSessionConfiguration, onSaveConfiguration = model::saveSessionConfiguration) { kind, cwd, text, origin, fieldOrigin ->
                     val submission = model.sendFirstSessionMessage(kind, cwd, text, newSessionHostId)
                     if (submission != null) {
@@ -1074,8 +1075,8 @@ internal fun RuntimeListScreen(
                         }
                         .testTag("home-session-list"),
                     state = homeListState,
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    contentPadding = PaddingValues(top = 12.dp, bottom = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
                 ) {
                     if (draftOpen || retainDraft) item(key = "session-draft") {
                         OrbisCollapse(expanded = draftSlotOpen, clipExpanded = false) { draftContent(draftOpen) }
@@ -1274,21 +1275,23 @@ internal fun RuntimeListScreen(
                                             swipeScope.launch { swipeAnim.snapTo(0f) }
                                             selectedRuntimeIds = selectedIds + runtime.runtimeId
                                         }),
-                                        contentInset = 16.dp,
+                                        contentInset = 6.dp,
                                     ) {
                                         Row(
-                                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
                                             verticalAlignment = Alignment.Top,
-                                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp),
                                         ) {
-                                            AgentEmblem(agentBrand(runtime.agentKind), 40.dp)
-                                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            AgentEmblem(agentBrand(runtime.agentKind), 30.dp)
+                                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                                 MotionText(row.card.title, style = MaterialTheme.typography.titleMedium,
-                                                    fontWeight = FontWeight.SemiBold, minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                                MiddleEllipsizedText(runtime.cwd,
-                                                    MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                                                    MaterialTheme.colorScheme.onSurfaceVariant)
-                                                Row(Modifier.fillMaxWidth().heightIn(min = 20.dp), verticalAlignment = Alignment.CenterVertically,
+                                                    fontWeight = FontWeight.SemiBold, minLines = 1, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                                Text(homeDirectoryLabel(runtime.cwd),
+                                                    modifier = Modifier.semantics { contentDescription = runtime.cwd },
+                                                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                Row(Modifier.fillMaxWidth().heightIn(min = 18.dp), verticalAlignment = Alignment.CenterVertically,
                                                     horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                                     Text(runtime.model?.let(::modelLabel)?.takeIf(String::isNotBlank)
                                                         ?: agentBrand(runtime.agentKind).title,

@@ -83,9 +83,81 @@ private fun RemoteState.prepareHomeCards(titles: SessionTitleCache?, language: A
         HomeRuntimeCard(it, titles?.resolve(this, it.sessionId, it, language) ?: runtimeDisplayName(it), hasPendingInteraction(it.runtimeId), sessionOperationErrors[it.runtimeId])
     }
 
-private fun RemoteState.orderHomeCards(cards: List<HomeRuntimeCard>): List<HomeRuntimeCard> {
+/** Short project label for compact cards; full paths remain available to accessibility. */
+internal fun homeDirectoryLabel(cwd: String): String {
+    val trimmed = cwd.trimEnd('/', '\\')
+    return trimmed.substringAfterLast('\\').substringAfterLast('/').ifBlank { cwd }
+}
+
+/**
+ * Last meaningful activity, rather than the catalog scan timestamp alone.
+ * Tool progress/deltas intentionally do not move cards on every update.
+ */
+internal fun RemoteState.homeActivityAt(runtime: RuntimeSummary): Long {
+    val entry = sessions[runtime.sessionId]
+    val catalogTime = entry?.modifiedAt ?: 0L
+    val conversation = conversations[runtime.runtimeId]
+    val latestTurnStart = conversation?.turnTimings?.values?.maxOfOrNull { it.startedAt } ?: 0L
+    // Follow Codex's native recent-activity order. Live turn starts compensate for
+    // catalog caching; tool output alone must not move a session up the list.
+    if (runtime.agentKind in setOf("codex", "codexDesktop") && entry?.recencyAt != null) {
+        return maxOf(entry.recencyAt, latestTurnStart)
+    }
+    if (conversation == null) return catalogTime
+    // Streaming assistant text and tool deltas must not cause home-list resorting.
+    // The user's next message, a turn-start event, or the catalog timestamp is the activity boundary.
+    val messageTime = conversation.messages.asReversed().firstOrNull { message ->
+        message.role == "user"
+    }?.timestamp ?: 0L
+    val turnTime = conversation.turnTimings.values.maxOfOrNull { turn ->
+        turn.startedAt + (turn.durationMs ?: 0L).coerceAtLeast(0L)
+    } ?: 0L
+    return maxOf(catalogTime, messageTime, turnTime)
+}
+
+internal data class RecentHomeProject(
+    val cwd: String,
+    val label: String,
+    val lastActivityAt: Long,
+    val sessionCount: Int,
+)
+
+/** Prefer Codex's native named projects; fill gaps with known working directories. */
+internal fun RemoteState.homeProjectPickerEntries(): List<RecentHomeProject> {
+    val native = nativeCodexProjects.filter { it.cwd.isNotBlank() && it.name.isNotBlank() }.map {
+        RecentHomeProject(it.cwd, it.name, it.recencyAt ?: 0L, 0)
+    }
+    val inferred = recentHomeProjects(limit = Int.MAX_VALUE)
+    return (native + inferred).distinctBy {
+        it.cwd.trimEnd('/', '\\').lowercase(java.util.Locale.ROOT)
+    }
+}
+
+/** Projects are Host-scoped, reused from known sessions/runtimes without browsing the filesystem. */
+internal fun RemoteState.recentHomeProjects(limit: Int = 6): List<RecentHomeProject> {
+    val known = sessions.values.filter { it.archived != true && it.cwd.isNotBlank() }
+    val active = runtimes.values.filter { it.cwd.isNotBlank() }
+    val paths = (known.map { it.cwd } + active.map { it.cwd }).distinctBy { it.trimEnd('/', '\\').lowercase(java.util.Locale.ROOT) }
+    return paths.map { cwd ->
+        val normalized = cwd.trimEnd('/', '\\')
+        val projectSessions = known.filter { it.cwd.trimEnd('/', '\\').equals(normalized, ignoreCase = true) }
+        val projectRuntimes = active.filter { it.cwd.trimEnd('/', '\\').equals(normalized, ignoreCase = true) }
+        RecentHomeProject(
+            cwd = cwd,
+            label = homeDirectoryLabel(cwd),
+            lastActivityAt = maxOf(
+                projectSessions.maxOfOrNull { it.recencyAt ?: it.modifiedAt } ?: 0L,
+                projectRuntimes.maxOfOrNull { homeActivityAt(it) } ?: 0L,
+            ),
+            sessionCount = projectSessions.size,
+        )
+    }.sortedWith(compareByDescending<RecentHomeProject> { it.lastActivityAt }.thenBy { it.label })
+        .take(limit.coerceAtLeast(0))
+}
+
+internal fun RemoteState.orderHomeCards(cards: List<HomeRuntimeCard>): List<HomeRuntimeCard> {
     val collator = java.text.Collator.getInstance(java.util.Locale.CHINA)
-    return cards.sortedWith(compareByDescending<HomeRuntimeCard> { sessions[it.runtime.sessionId]?.modifiedAt ?: 0L }
+    return cards.sortedWith(compareByDescending<HomeRuntimeCard> { homeActivityAt(it.runtime) }
         .thenBy(collator) { it.title }.thenBy { it.runtime.runtimeId })
 }
 
@@ -119,13 +191,16 @@ internal class HomePresentationWorker(private val beforeFacts: (() -> Unit)? = n
             old.state.runtimes.keys.all { id ->
                 old.state.conversations[id]?.interactions.orEmpty() == request.state.conversations[id]?.interactions.orEmpty()
             } &&
-            !catalogTranscriptChanged(old.state, request.state, titles, counts = false)) return@withContext previous ?: request.state.homeSnapshot
+            !catalogTranscriptChanged(old.state, request.state, titles, counts = false) &&
+            request.state.runtimes.values.all { runtime ->
+                old.state.homeActivityAt(runtime) == request.state.homeActivityAt(runtime)
+            }) return@withContext previous ?: request.state.homeSnapshot
         titles.retain(request.state)
         val state = request.state
         if (state.homeRuntimesUpdating) return@withContext state.homeSnapshot
         beforeFacts?.invoke()
         val facts = state.prepareHomeCards(titles, request.language)
-        val times = facts.map { state.sessions[it.runtime.sessionId]?.modifiedAt ?: 0L }
+        val times = facts.map { state.homeActivityAt(it.runtime) }
         if (facts == previousFacts && times == previousTimes) return@withContext previous
         beforeSort?.invoke()
         val next = state.orderHomeCards(facts)

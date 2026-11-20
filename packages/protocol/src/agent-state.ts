@@ -293,7 +293,10 @@ export type HostCatalogBackend = z.infer<typeof HostCatalogBackendSchema>;
 export const AgentCatalogSessionSchema = z.strictObject({
   sessionId: identity, name: z.string().max(256).optional(), cwd: z.string().max(4096),
   firstMessage: z.string().max(4_000).optional(), createdAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  modifiedAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), messageCount: z.number().int().nonnegative().max(100_000),
+  modifiedAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  /** Native thread recency (Codex thread/list), distinct from persistence updates. */
+  recencyAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  messageCount: z.number().int().nonnegative().max(100_000),
   agentKind: AgentKindSchema, hostname: z.string().min(1).max(256), archived: z.boolean().optional(),
   modelProvider: z.string().min(1).max(128).optional(),
 });
