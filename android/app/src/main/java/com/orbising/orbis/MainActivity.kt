@@ -4029,6 +4029,9 @@ private fun MessageBlocks(
                         result = result,
                         live = live,
                         summary = summary,
+                        imageFile = block.file,
+                        imageDownloads = downloads,
+                        downloadFile = downloadFile,
                         canRead = LocalToolContentAvailable.current,
                         openDetail = { part -> summary?.let { openDetail(runtimeId, it, part) } },
                     )
@@ -4166,11 +4169,20 @@ private fun CollapsedTool(
     result: ChatMessage?,
     live: Boolean = false,
     summary: ToolSummary? = null,
+    imageFile: MessageFileReference? = null,
+    imageDownloads: Map<String, ArtifactDownload> = emptyMap(),
+    downloadFile: (String) -> Unit = {},
     canRead: Boolean = false,
     openDetail: (String) -> Unit = {},
 ) {
     if (summary != null) {
-        ToolSummaryDisclosure(summary, canRead, openDetail)
+        ToolSummaryDisclosure(summary, canRead, openDetail, expandedContent = if (imageFile == null) null else {
+            {
+                val previewBlock = RemoteContent(type = "render", renderKind = "image", text = imageFile.fileName, file = imageFile)
+                ImageReferenceCard(previewBlock, imageDownloads.values.firstOrNull { it.sourcePath == imageFile.referenceId },
+                    onDownload = { downloadFile(imageFile.referenceId.orEmpty()) })
+            }
+        })
         return
     }
     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -4191,6 +4203,13 @@ private fun CollapsedTool(
         expanded = expanded,
         onClick = { expanded = !expanded },
         tint = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+        expandedContent = if (imageFile == null) null else {
+            {
+                val previewBlock = RemoteContent(type = "render", renderKind = "image", text = imageFile.fileName, file = imageFile)
+                ImageReferenceCard(previewBlock, imageDownloads.values.firstOrNull { it.sourcePath == imageFile.referenceId },
+                    onDownload = { downloadFile(imageFile.referenceId.orEmpty()) })
+            }
+        },
     )
 }
 
@@ -4205,6 +4224,7 @@ private fun CompactDisclosure(
     collapsedSummary: String? = null,
     /** Short state shown beside the title on the same line (iOS: 「read  已完成」). */
     status: String? = null,
+    expandedContent: (@Composable () -> Unit)? = null,
 ) {
     val preview = collapsedSummary ?: summary.lineSequence().firstOrNull().orEmpty()
     NeumorphSurface(
@@ -4230,8 +4250,11 @@ private fun CompactDisclosure(
                         color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 OrbisCollapse(expanded = expanded) {
-                    Text(summary, style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace)
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(summary, style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace)
+                        expandedContent?.invoke()
+                    }
                 }
             }
             Icon(

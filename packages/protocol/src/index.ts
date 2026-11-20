@@ -535,6 +535,8 @@ export const RemoteContentSchema = z.discriminatedUnion("type", [
     toolName: z.string(),
     arguments: z.unknown().optional(),
     summary: ToolSummarySchema.optional(),
+    sourcePath: z.string().min(1).max(4096).optional(),
+    file: MessageFileReferenceSchema.optional(),
   }),
   /** Host-normalized user-visible content. Unknown renderKind values use `text` as the safe fallback. */
   z.strictObject({

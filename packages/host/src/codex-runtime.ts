@@ -4661,6 +4661,7 @@ function toolCallMessage(item: Record<string, unknown>): ChatMessage | undefined
       toolCallId: tool.toolCallId,
       toolName: tool.toolName,
       summary: tool.summary,
+      ...(item.type === "imageView" && typeof item.path === "string" ? { sourcePath: item.path } : {}),
     }],
     timestamp: Date.now(),
   };

@@ -42,7 +42,8 @@ internal fun toolPartTitle(part: String): String = when (part) {
 
 /** Expanding a summary is local; full content is read only after choosing a part. */
 @Composable
-internal fun ToolSummaryDisclosure(summary: ToolSummary, canRead: Boolean, onReadPart: (String) -> Unit) {
+internal fun ToolSummaryDisclosure(summary: ToolSummary, canRead: Boolean, onReadPart: (String) -> Unit,
+                                   expandedContent: (@Composable () -> Unit)? = null) {
     var expanded by rememberSaveable(summary.tool) { mutableStateOf(false) }
     val phase = when (summary.phase) {
         "started", "running" -> L10n.tr("执行中")
@@ -100,6 +101,7 @@ internal fun ToolSummaryDisclosure(summary: ToolSummary, canRead: Boolean, onRea
                             "unrecoverable" -> SummaryCaption(L10n.tr("此部分内容已无法恢复"))
                         }
                     }
+                    expandedContent?.invoke()
                 }
             }
         }

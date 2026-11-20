@@ -56,6 +56,12 @@ export class DeviceMessageRendering {
       let normalized = options.codex ? normalizeCodexMessage(value, resolve, streaming) : value;
       if (options.rich && !streaming) {
         normalized = { ...normalized, content: normalized.content.map(block => {
+          if (block.type === "tool_call" && block.sourcePath !== undefined) {
+            const name = block.sourcePath.split(/[\\/]/u).at(-1) || "image";
+            const file = resolve(block.sourcePath);
+            return file === undefined ? { ...block, sourcePath: undefined }
+              : { ...block, sourcePath: undefined, file: { fileName: name, referenceId: file.referenceId } };
+          }
           if (block.type !== "render" || block.renderKind !== "image" || block.sourcePath === undefined) return block;
           const name = block.text.split(/[\\/]/u).at(-1) || "image";
           const file = resolve(block.sourcePath);

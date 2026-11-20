@@ -31,6 +31,20 @@ it("projects Codex local images to a Host-issued file reference", () => {
   } }] } });
 });
 
+it("projects an imageView tool path into its expandable tool preview reference", () => {
+  const files = new MessageFileReferences();
+  const event = { type: "message.finished" as const, message: {
+    messageId: "view-image", role: "assistant" as const, timestamp: 1,
+    content: [{ type: "tool_call" as const, toolCallId: "view-image", toolName: "查看图片", sourcePath: "package.json" }],
+  } } satisfies RuntimeEvent;
+  const projected = new DeviceMessageRendering(files).project("device", {
+    type: "runtime.event", runtimeId: "codex:thread", event,
+  }, { rich: true, codex: true, cwd: process.cwd() }) as { event: RuntimeEvent };
+  expect(projected.event).toMatchObject({ message: { content: [{ type: "tool_call", file: {
+    fileName: "package.json", referenceId: expect.stringMatching(/^orbis-message-file:/),
+  } }] } });
+});
+
 describe("MSG-RENDER-01 device message rendering", () => {
   it("gates rich blocks and does not treat another backend's Markdown as a Codex directive", () => {
     const render = renderer(), event = { type: "message.finished", message: assistant() } as const;
