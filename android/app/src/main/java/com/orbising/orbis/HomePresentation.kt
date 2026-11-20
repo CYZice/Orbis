@@ -104,10 +104,10 @@ internal fun RemoteState.homeActivityAt(runtime: RuntimeSummary): Long {
         return maxOf(entry.recencyAt, latestTurnStart)
     }
     if (conversation == null) return catalogTime
+    // Streaming assistant text and tool deltas must not cause home-list resorting.
+    // The user's next message, a turn-start event, or the catalog timestamp is the activity boundary.
     val messageTime = conversation.messages.asReversed().firstOrNull { message ->
-        message.role == "user" || message.role == "assistant" && message.content.any { part ->
-            part.type == "text" && !part.text.isNullOrBlank()
-        }
+        message.role == "user"
     }?.timestamp ?: 0L
     val turnTime = conversation.turnTimings.values.maxOfOrNull { turn ->
         turn.startedAt + (turn.durationMs ?: 0L).coerceAtLeast(0L)
