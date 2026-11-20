@@ -45,6 +45,39 @@ it("projects an imageView tool path into its expandable tool preview reference",
   } }] } });
 });
 
+it("projects media references on streaming messages and strips paths for legacy clients", () => {
+  const event = { type: "message.started" as const, message: {
+    messageId: "stream-image", role: "user" as const, timestamp: 1,
+    content: [{ type: "render" as const, renderKind: "image", text: "shot.png", sourcePath: "package.json" },
+      { type: "tool_call" as const, toolCallId: "view", toolName: "查看图片", sourcePath: "package.json" }],
+  } } satisfies RuntimeEvent;
+  const rich = new DeviceMessageRendering(new MessageFileReferences()).project("device", {
+    type: "runtime.event", runtimeId: "codex:thread", event,
+  }, { rich: true, codex: true, cwd: process.cwd() }) as { event: RuntimeEvent };
+  expect(rich.event).toMatchObject({ message: { content: [
+    { type: "render", renderKind: "file_reference", file: { fileName: "shot.png" } },
+    { type: "tool_call", file: { fileName: "package.json" } },
+  ] } });
+  expect(JSON.stringify(rich.event)).not.toContain("sourcePath");
+
+  const legacy = new DeviceMessageRendering(new MessageFileReferences()).project("old", {
+    type: "runtime.event", runtimeId: "codex:thread", event,
+  }, { rich: false, codex: true, cwd: process.cwd() }) as { event: RuntimeEvent };
+  expect(JSON.stringify(legacy.event)).not.toContain("sourcePath");
+
+  const assistantEvent = { type: "message.started" as const, message: {
+    messageId: "assistant-stream-image", role: "assistant" as const, timestamp: 1,
+    content: [{ type: "text" as const, text: "看这张图" },
+      { type: "render" as const, renderKind: "image", text: "shot.png", sourcePath: "package.json" }],
+  } } satisfies RuntimeEvent;
+  const previewEngine = new DeviceMessageRendering(new MessageFileReferences());
+  previewEngine.observe("codex:thread", assistantEvent);
+  const preview = previewEngine.project("device", {
+    type: "runtime.event", runtimeId: "codex:thread", event: assistantEvent,
+  }, { rich: true, codex: true, cwd: process.cwd() }) as { event: RuntimeEvent };
+  expect(JSON.stringify(preview.event)).not.toContain("sourcePath");
+});
+
 describe("MSG-RENDER-01 device message rendering", () => {
   it("gates rich blocks and does not treat another backend's Markdown as a Codex directive", () => {
     const render = renderer(), event = { type: "message.finished", message: assistant() } as const;

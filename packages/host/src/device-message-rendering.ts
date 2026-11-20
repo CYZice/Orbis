@@ -52,24 +52,22 @@ export class DeviceMessageRendering {
     const event = envelope.event as RuntimeEvent;
     const runtimeId = String(envelope.runtimeId);
     const resolve = (path: string) => options.rich ? this.#files.register(path, options.cwd, deviceId, runtimeId) : undefined;
-    const project = (value: ChatMessage, streaming = false): ChatMessage => {
-      let normalized = options.codex ? normalizeCodexMessage(value, resolve, streaming) : value;
-      if (options.rich && !streaming) {
-        normalized = { ...normalized, content: normalized.content.map(block => {
-          if (block.type === "tool_call" && block.sourcePath !== undefined) {
-            const name = block.sourcePath.split(/[\\/]/u).at(-1) || "image";
-            const file = resolve(block.sourcePath);
-            return file === undefined ? { ...block, sourcePath: undefined }
-              : { ...block, sourcePath: undefined, file: { fileName: name, referenceId: file.referenceId } };
-          }
-          if (block.type !== "render" || block.renderKind !== "image" || block.sourcePath === undefined) return block;
-          const name = block.text.split(/[\\/]/u).at(-1) || "image";
-          const file = resolve(block.sourcePath);
-          return file === undefined ? { type: "render", renderKind: "image", text: "图片不可用" }
-            : { type: "render", renderKind: "file_reference", purpose: "output", text: name,
-              file: { fileName: name, referenceId: file.referenceId } };
-        }) };
+    const projectMedia = (value: ChatMessage): ChatMessage => ({ ...value, content: value.content.map(block => {
+      if (block.type === "tool_call" && block.sourcePath !== undefined) {
+        const name = block.sourcePath.split(/[\\/]/u).at(-1) || "image";
+        const file = resolve(block.sourcePath);
+        return file === undefined ? { ...block, sourcePath: undefined }
+          : { ...block, sourcePath: undefined, file: { fileName: name, referenceId: file.referenceId } };
       }
+      if (block.type !== "render" || block.renderKind !== "image" || block.sourcePath === undefined) return block;
+      const name = block.text.split(/[\\/]/u).at(-1) || "image";
+      const file = resolve(block.sourcePath);
+      return file === undefined ? { type: "render", renderKind: "image", text: "图片不可用" }
+        : { type: "render", renderKind: "file_reference", purpose: "output", text: name,
+          file: { fileName: name, referenceId: file.referenceId } };
+    }) });
+    const project = (value: ChatMessage, streaming = false): ChatMessage => {
+      const normalized = projectMedia(options.codex ? normalizeCodexMessage(value, resolve, streaming) : value);
       if (!options.rich) return downgradeMessageForLegacy(normalized);
       if (streaming || !options.generatedImagePath || !normalized.content.some(block => block.type === "render" && block.renderKind === "codex_generated_image")) return normalized;
       const path = options.generatedImagePath(normalized.messageId);
@@ -86,7 +84,10 @@ export class DeviceMessageRendering {
       case "message.started":
       case "message.finished": {
         const preview = event.type === "message.started" ? this.#previews.get(event) : undefined;
-        if (preview?.type === "message.started") { next = preview; break; }
+        if (preview?.type === "message.started") {
+          next = { ...preview, message: project(preview.message, true) };
+          break;
+        }
         const rendered = project(event.message, event.type === "message.started");
         if (rendered !== event.message) next = { ...event, message: rendered };
         break;
