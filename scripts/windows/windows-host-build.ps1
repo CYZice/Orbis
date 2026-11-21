@@ -126,7 +126,7 @@ if (result.status !== 0 || result.stdout.trim() !== expected) {
                         if ($LASTEXITCODE -eq 0) { $installerDrive = $candidate; break }
                     }
                     if (!$installerDrive) { throw 'No drive letter available for installer staging' }
-                    & $InnoCompiler '/Qp' "/DStageDir=$installerDrive" "/DOutputDir=$releaseRoot" "$repoRoot\packages\windows-host\installer\OrbisHost.iss"
+                    & $InnoCompiler '/Qp' "/DStageDir=$installerDrive" "/DOutputDir=$releaseRoot" "/DOrbisVersion=$hostVersion" "$repoRoot\packages\windows-host\installer\OrbisHost.iss"
                     if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
                 } finally {
                     if ($installerDrive) { & "$env:SystemRoot\System32\subst.exe" $installerDrive /D }

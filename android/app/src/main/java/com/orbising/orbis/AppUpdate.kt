@@ -90,7 +90,7 @@ internal fun parseLatestRelease(json: String): AppUpdateInfo? = runCatching {
     val metaRequest = Request.Builder().url(metaUrl).header("Accept", "application/json").build()
     val metadataJson = updateHttp.newCall(metaRequest).execute().use { response ->
         if (!response.isSuccessful) return null
-        response.body.string()
+        response.body?.string() ?: return null
     }
     parseReleaseMetadata(json, metadataJson)
 }.getOrNull()
@@ -102,7 +102,7 @@ internal suspend fun checkLatestAppUpdate(context: Context): AppUpdateInfo? = wi
         .header("User-Agent", "Orbis-Android/${packageInfo.versionName ?: "unknown"}").build()
     val info = updateHttp.newCall(request).execute().use { response ->
         if (!response.isSuccessful) return@withContext null
-        parseLatestRelease(response.body.string())
+        parseLatestRelease(response.body?.string() ?: return@withContext null)
     }
     info?.takeIf { it.versionCode > currentCode }
 }
@@ -114,7 +114,7 @@ internal suspend fun downloadAppUpdate(context: Context, info: AppUpdateInfo): F
     val request = Request.Builder().url(info.apkUrl).header("User-Agent", "Orbis-Android").build()
     updateHttp.newCall(request).execute().use { response ->
         check(response.isSuccessful) { "下载更新失败：HTTP ${response.code}" }
-        response.body.byteStream().use { input -> temporary.outputStream().use { output -> input.copyTo(output) } }
+        checkNotNull(response.body).byteStream().use { input -> temporary.outputStream().use { output -> input.copyTo(output) } }
     }
     val digest = MessageDigest.getInstance("SHA-256")
     temporary.inputStream().use { input ->
