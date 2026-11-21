@@ -5,7 +5,7 @@
   #define OutputDir "."
 #endif
 #ifndef OrbisVersion
-  #define OrbisVersion "0.1.61"
+  #define OrbisVersion "0.1.62"
 #endif
 [Setup]
 AppId={{7D5CE083-9F47-48CA-B802-CC14F269FAE1}

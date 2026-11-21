@@ -3,12 +3,14 @@
     [string]$CompilerRoot = 'D:\Qt\Tools\mingw1310_64',
     [string]$DefaultRelay = 'wss://orbising.com/relay',
     [switch]$Package,
-    [string]$InnoCompiler
+    [string]$InnoCompiler,
+    [string]$OutputRoot
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
-$buildDir = Join-Path $repoRoot '.artifacts\windows-host-build'
-$artifactRoot = Join-Path $repoRoot '.artifacts\host'
+$buildDir = if ($OutputRoot) { Join-Path $OutputRoot 'build' } else { Join-Path $repoRoot '.artifacts\windows-host-build' }
+$artifactRoot = if ($OutputRoot) { Join-Path $OutputRoot 'host' } else { Join-Path $repoRoot '.artifacts\host' }
+if ($OutputRoot -and (Test-Path -LiteralPath $artifactRoot)) { throw 'Choose a fresh OutputRoot; refusing to replace its host directory.' }
 $packageSucceeded = $false
 $savedPath = $env:Path
 try {
