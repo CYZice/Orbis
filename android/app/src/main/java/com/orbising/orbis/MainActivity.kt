@@ -4000,6 +4000,9 @@ internal fun AssistantTurnCard(
     }
     val live = messages.any { it.messageId in streamingMessageIds }
     val complete = !live && (turnTiming == null || turnTiming.durationMs != null)
+    // Fork is a companion action to copying the completed reply. Never expose it on its own
+    // or while the reply card is still receiving content.
+    val hasReplyActions = complete && copyText.isNotBlank()
     Column {
         GrowingReplyCard(cardId, motionParts, live, replyArrivals) {
             Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -4027,10 +4030,10 @@ internal fun AssistantTurnCard(
                 fileChanges()
             }
         }
-        if (turnTiming != null || complete && (copyText.isNotBlank() || onFork != null)) {
+        if (turnTiming != null || hasReplyActions) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp).testTag("reply-footer"), verticalAlignment = Alignment.CenterVertically) {
-                if (complete && copyText.isNotBlank()) ReplyCopyButton(L10n.tr("复制回复"), identity = cardId) { copyText }
-                if (complete && onFork != null) ReplyActionButton(L10n.tr("从这条回复创建分支"), onFork) {
+                if (hasReplyActions) ReplyCopyButton(L10n.tr("复制回复"), identity = cardId) { copyText }
+                if (hasReplyActions && onFork != null) ReplyActionButton(L10n.tr("从这条回复创建分支"), onFork) {
                     Icon(OrbisSymbols.Fork, contentDescription = null, modifier = Modifier.size(16.dp))
                 }
                 Spacer(Modifier.weight(1f))

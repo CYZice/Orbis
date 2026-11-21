@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -46,6 +47,8 @@ internal data class AppUpdateInfo(
     val apkUrl: String,
     val sha256: String,
 )
+
+internal data class AppUpdateProgress(val receivedBytes: Long, val totalBytes: Long?)
 
 private const val RELEASES_URL = "https://api.github.com/repos/CYZice/Orbis/releases/latest"
 private const val APK_NAME = "orbis.apk"
@@ -107,14 +110,35 @@ internal suspend fun checkLatestAppUpdate(context: Context): AppUpdateInfo? = wi
     info?.takeIf { it.versionCode > currentCode }
 }
 
-internal suspend fun downloadAppUpdate(context: Context, info: AppUpdateInfo): File = withContext(Dispatchers.IO) {
+private fun updateApkFile(context: Context, info: AppUpdateInfo): File =
+    File(context.cacheDir, "updates/orbis-${info.versionCode}.apk")
+
+internal suspend fun downloadAppUpdate(
+    context: Context,
+    info: AppUpdateInfo,
+    onProgress: (AppUpdateProgress) -> Unit = {},
+): File = withContext(Dispatchers.IO) {
     val directory = File(context.cacheDir, "updates").apply { mkdirs() }
     val temporary = File(directory, "orbis-${info.versionCode}.apk.tmp")
-    val target = File(directory, "orbis-${info.versionCode}.apk")
+    val target = updateApkFile(context, info)
+    if (target.isFile) return@withContext target
     val request = Request.Builder().url(info.apkUrl).header("User-Agent", "Orbis-Android").build()
     updateHttp.newCall(request).execute().use { response ->
         check(response.isSuccessful) { "下载更新失败：HTTP ${response.code}" }
-        checkNotNull(response.body).byteStream().use { input -> temporary.outputStream().use { output -> input.copyTo(output) } }
+        val body = checkNotNull(response.body)
+        val total = body.contentLength().takeIf { it >= 0L }
+        var received = 0L
+        onProgress(AppUpdateProgress(received, total))
+        body.byteStream().use { input -> temporary.outputStream().use { output ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                output.write(buffer, 0, count)
+                received += count
+                onProgress(AppUpdateProgress(received, total))
+            }
+        } }
     }
     val digest = MessageDigest.getInstance("SHA-256")
     temporary.inputStream().use { input ->
@@ -130,16 +154,17 @@ internal suspend fun downloadAppUpdate(context: Context, info: AppUpdateInfo): F
     target
 }
 
-private fun installAppUpdate(context: Context, apk: File) {
+private fun installAppUpdate(context: Context, apk: File): Boolean {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
         context.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}")))
-        return
+        return false
     }
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.update-files", apk)
     context.startActivity(Intent(Intent.ACTION_VIEW).apply {
         setDataAndType(uri, "application/vnd.android.package-archive")
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
     })
+    return true
 }
 
 @Composable
@@ -147,6 +172,8 @@ internal fun AppUpdateSettings() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var update by remember { mutableStateOf<AppUpdateInfo?>(null) }
+    var cached by remember { mutableStateOf(false) }
+    var progress by remember { mutableStateOf<AppUpdateProgress?>(null) }
     var status by remember { mutableStateOf(L10n.tr("尚未检查")) }
     var busy by remember { mutableStateOf(false) }
     SettingsGroup(L10n.tr("软件更新"), tag = "settings-updates") {
@@ -158,29 +185,68 @@ internal fun AppUpdateSettings() {
                         busy = true; status = L10n.tr("正在检查…")
                         scope.launch {
                             runCatching { checkLatestAppUpdate(context) }
-                                .onSuccess { value -> update = value; status = if (value == null) L10n.tr("当前已是最新版本") else L10n.tr("发现版本 {0}", value.version) }
+                                .onSuccess { value ->
+                                    update = value
+                                    cached = value?.let { updateApkFile(context, it).isFile } == true
+                                    progress = null
+                                    status = if (value == null) L10n.tr("当前已是最新版本") else if (cached) {
+                                        L10n.tr("版本 {0} 已下载，等待安装", value.version)
+                                    } else L10n.tr("发现版本 {0}", value.version)
+                                }
                                 .onFailure { status = it.message ?: L10n.tr("检查更新失败") }
                             busy = false
                         }
                     }
                 }, enabled = !busy)
                 update?.let { info ->
-                    NeumorphTextButton(L10n.tr("下载并安装"), onClick = {
+                    NeumorphTextButton(L10n.tr(if (cached) "安装" else "下载并安装"), onClick = {
                         if (!busy) {
-                            busy = true; status = L10n.tr("正在下载 {0}…", info.version)
+                            busy = true
+                            status = if (cached) L10n.tr("正在打开安装程序…") else L10n.tr("正在下载 {0}…", info.version)
                             scope.launch {
-                                runCatching { downloadAppUpdate(context, info) }
-                                    .onSuccess { apk -> status = L10n.tr("下载完成，请确认安装"); installAppUpdate(context, apk) }
-                                    .onFailure { status = it.message ?: L10n.tr("下载更新失败") }
+                                runCatching {
+                                    if (cached) updateApkFile(context, info)
+                                    else downloadAppUpdate(context, info) { progress = it }
+                                }.onSuccess { apk ->
+                                    cached = true
+                                    progress = null
+                                    status = if (installAppUpdate(context, apk)) {
+                                        L10n.tr("安装程序已打开，请确认安装")
+                                    } else {
+                                        L10n.tr("安装包已下载，请允许安装后再次点击安装")
+                                    }
+                                }
+                                    .onFailure {
+                                        progress = null
+                                        status = it.message ?: L10n.tr("下载更新失败")
+                                    }
                                 busy = false
                             }
                         }
                     }, enabled = !busy)
                 }
-                if (busy) CircularProgressIndicator(Modifier.padding(8.dp).size(18.dp), strokeWidth = 2.dp)
+                if (busy && progress == null) CircularProgressIndicator(Modifier.padding(8.dp).size(18.dp), strokeWidth = 2.dp)
+            }
+            progress?.let { current ->
+                val fraction = current.totalBytes?.takeIf { it > 0L }?.let { current.receivedBytes.toFloat() / it }
+                if (fraction == null) LinearProgressIndicator(Modifier.fillMaxWidth())
+                else LinearProgressIndicator({ fraction.coerceIn(0f, 1f) }, Modifier.fillMaxWidth())
+                Text(
+                    current.totalBytes?.let { total ->
+                        L10n.tr("已下载 {0} / {1}", formatBytes(current.receivedBytes), formatBytes(total))
+                    } ?: L10n.tr("已下载 {0}", formatBytes(current.receivedBytes)),
+                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             Text(status, style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
                 color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+}
+
+private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1024L * 1024L -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+    bytes >= 1024L -> "%.1f KB".format(bytes / 1024.0)
+    else -> "$bytes B"
 }

@@ -94,7 +94,10 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
         if (kind == KIMI_CODE_KIND && (!state.kimiCodeSupported || config?.snapshot == null)) return
         if (cwd.isNotBlank() && state.canCreateSessionOn(state.hostId) && onSubmit(kind, cwd, text.trim(), bounds, fieldBounds)) text = ""
     }
-    val supported = state.launchableAgents ?: state.supportedAgents
+    // `supportedAgents` means currently attached backends, not what a new session may start.
+    // Only launchableAgents may disable a new-session choice; a missing field is an unknown
+    // capability and must keep the choice usable until the Host returns a definite answer.
+    val supported = state.launchableAgents
     val kinds = listOf("codex", "claude", "dsh", "pi") + listOfNotNull(KIMI_CODE_KIND.takeIf { state.kimiCodeSupported && supported?.contains(it) == true })
     val family = agentFamily(kind)
     /** Both native entries of a family can start here, so its version is a real choice (Codex terminal / desktop, DeepSeek Web / Desktop). */
