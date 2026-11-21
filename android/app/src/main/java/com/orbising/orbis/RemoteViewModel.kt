@@ -459,7 +459,6 @@ class RemoteViewModel(application: Application) : AndroidViewModel(application) 
     fun submittedSend(commandId: String): PendingSend? =
         active()?.state?.value?.pendingSends?.values?.firstOrNull { it.commandId == commandId }
 
-    fun detachUploads(taskIds: Set<String>) = active()?.detachUploads(taskIds)
 
     fun attachedTaskIds(sessionKey: String): Set<String> =
         active()?.attachedTaskIds(sessionKey).orEmpty()
@@ -512,7 +511,7 @@ class RemoteViewModel(application: Application) : AndroidViewModel(application) 
 
     fun downloadArtifact(artifact: RemoteArtifact): Boolean = active()?.downloadArtifact(artifact) == true
 
-    fun downloadFile(path: String): Boolean = active()?.downloadFile(path) == true
+    fun downloadFile(path: String, previewOnly: Boolean = false): Boolean = active()?.downloadFile(path, previewOnly) == true
 
     fun cancelDownload(taskId: String) = active()?.cancelDownload(taskId)
 
@@ -553,8 +552,8 @@ class RemoteViewModel(application: Application) : AndroidViewModel(application) 
             ?: active()?.dismissNotification(runtimeId, notificationId)
     }
 
-    fun queueUpload(uri: Uri, runtimeId: String, onQueued: (String) -> Unit = {}) =
-        active()?.queueUpload(uri, runtimeId, onQueued)
+    fun queueUpload(uri: Uri, runtimeId: String, onQueued: (String) -> Unit = {}, onFinished: () -> Unit = {}) =
+        active()?.queueUpload(uri, runtimeId, onQueued, onFinished)
 
     fun removeUploads(taskIds: Set<String>) = active()?.removeUploads(taskIds)
 

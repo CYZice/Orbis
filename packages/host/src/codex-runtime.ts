@@ -129,7 +129,8 @@ const CODEX_SLASH_COMMANDS: readonly RuntimeSlashCommand[] = [
   { name: "name", description: "Show or set the Codex session display name", source: "builtin", argument: { kind: "text", required: false, hint: "[name]" } },
   { name: "new", description: "Start a new Codex session", source: "builtin" },
   { name: "resume", description: "Resume a different Codex session", source: "builtin", argument: { kind: "text", required: true, hint: "<session-id>" } },
-  { name: "fork", description: "Fork this Codex session into a new one", source: "builtin" },
+  { name: "edit-message", description: "Edit and resend a previous user message", source: "builtin", argument: { kind: "text", required: true } },
+  { name: "fork", description: "Fork this Codex session into a new one", source: "builtin", argument: { kind: "text", required: false } },
   { name: "compact", description: "Compact the Codex session context", source: "builtin" },
   { name: "tree", description: "Browse this session's history and rewind to a point", source: "builtin", argument: { kind: "tree", required: false, options: [] } },
   { name: "quit", description: "Quit Codex (close the TUI window on the computer)", source: "builtin" },
@@ -199,12 +200,65 @@ function isImagePath(path: string): boolean {
   return /\.(?:avif|bmp|gif|heic|jpeg|jpg|png|tif|tiff|webp)$/iu.test(path);
 }
 
-function codexPromptInput(text: string, attachments?: readonly string[]): unknown[] {
+const attachmentSection = "\n\n附件路径：\n";
+const skillPattern = /(?:^|\s)\$([\p{L}\p{N}_-]+)(?![\p{L}\p{N}_-])/gu;
+
+function codexPromptInput(
+  text: string,
+  attachments: readonly string[] | undefined,
+  commands: readonly DynamicSlashCommand[],
+  imageUrls: readonly string[] = [],
+  explicitSkills: readonly { name: string; path: string }[] = [],
+): unknown[] {
   const files = attachments ?? [];
   const images = files.filter(isImagePath);
   const otherFiles = files.filter(path => !isImagePath(path));
-  const prompt = otherFiles.length === 0 ? text : `${text}\n\n附件路径：\n${otherFiles.join("\n")}`;
-  return [{ type: "text", text: prompt }, ...images.map(path => ({ type: "localImage", path }))];
+  const prompt = otherFiles.length === 0 ? text : `${text}${attachmentSection}${otherFiles.join("\n")}`;
+  const requested = new Set(Array.from(text.matchAll(skillPattern), match => match[1]));
+  const skills = commands.flatMap(command => command.kind === "skill" && command.skillPath && requested.has(command.name)
+    ? [{ type: "skill", name: command.name, path: command.skillPath }] : []);
+  const seenSkills = new Set(skills.map(skill => `${skill.name}\u0000${skill.path}`));
+  const preservedSkills = explicitSkills.filter(skill => {
+    const key = `${skill.name}\u0000${skill.path}`;
+    if (seenSkills.has(key)) return false;
+    seenSkills.add(key);
+    return true;
+  }).map(skill => ({ type: "skill", name: skill.name, path: skill.path }));
+  const remoteImages = imageUrls.filter(url => url.trim().length > 0)
+    .map(url => ({ type: "image", url, image_url: url }));
+  return [{ type: "text", text: prompt }, ...images.map(path => ({ type: "localImage", path })), ...remoteImages, ...skills, ...preservedSkills];
+}
+
+function originalUserInput(text: string, attachments: readonly string[] = [], commands: readonly DynamicSlashCommand[] = [], imageUrls: readonly string[] = []): OriginalUserInput {
+  const requested = new Set(Array.from(text.matchAll(skillPattern), match => match[1]));
+  const skills = commands.flatMap(command => command.kind === "skill" && command.skillPath && requested.has(command.name)
+    ? [{ name: command.name, path: command.skillPath }] : []);
+  return { attachments: [...new Set(attachments)], imageUrls: [...new Set(imageUrls)], skills };
+}
+
+function originalUserInputFromItem(item: Record<string, unknown>): OriginalUserInput | undefined {
+  if (item.type !== "userMessage") return undefined;
+  const parts = Array.isArray(item.content) ? item.content.map(object) : [];
+  const text = parts.filter(part => ["text", "Text", "output_text"].includes(String(part.type)))
+    .map(part => typeof part.text === "string" ? part.text : "").join("\n");
+  const attachments = new Set<string>();
+  const imageUrls = new Set<string>();
+  const skills: Array<{ name: string; path: string }> = [];
+  for (const part of parts) {
+    if (["image", "localImage"].includes(String(part.type))) {
+      const path = typeof part.path === "string" ? part.path : typeof part.localPath === "string" ? part.localPath : undefined;
+      const url = typeof part.url === "string" ? part.url : typeof part.image_url === "string" ? part.image_url : undefined;
+      if (path) attachments.add(path); else if (url) imageUrls.add(url);
+    } else if (part.type === "skill" && typeof part.name === "string" && typeof part.path === "string") {
+      skills.push({ name: part.name, path: part.path });
+    }
+  }
+  const marker = text.lastIndexOf(attachmentSection);
+  if (marker >= 0) for (const path of text.slice(marker + attachmentSection.length).trim().split("\n")) {
+    if (path.trim()) attachments.add(path.trim());
+  }
+  if (!text && attachments.size === 0 && imageUrls.size === 0 && skills.length === 0) return undefined;
+  return { attachments: [...attachments], imageUrls: [...imageUrls], skills };
 }
 
 type PersistedMessageMapping = {
@@ -252,6 +306,9 @@ type ThreadState = {
    * 磁盘 rollout（`turn_context` / `task_started` 划出边界）。
    */
   entryTurns: Map<string, string>;
+  /** Original user inputs, kept separately from the device display projection for edit/resend. */
+  originalUserInputs: Map<string, OriginalUserInput>;
+  editRecoveries: Map<string, OriginalUserInput>;
   /** 轮次顺序（turn id，按时间）。助手回复要往后保留一轮时靠它找下一轮。 */
   turnOrder: string[];
   pendingReview?: { item: Record<string, unknown>; turnId: string };
@@ -349,6 +406,12 @@ type ThreadState = {
   sourceCommittedEntries: RemoteSessionEntry[];
   liveMessages: Map<string, SessionLiveMessage>;
   liveTools: Map<string, SessionLiveTool>;
+};
+
+type OriginalUserInput = {
+  attachments: string[];
+  imageUrls: string[];
+  skills: Array<{ name: string; path: string }>;
 };
 
 export class CodexRuntime implements AgentBackend {
@@ -711,6 +774,8 @@ export class CodexRuntime implements AgentBackend {
       committedItemCount: 0,
       completedItems: new Map(),
       entryTurns: new Map(),
+      originalUserInputs: new Map(),
+      editRecoveries: new Map(),
       turnOrder: [],
       turnInProgress: false,
       turnId: undefined,
@@ -1216,10 +1281,10 @@ export class CodexRuntime implements AgentBackend {
     this.#eventSink = sink;
   }
 
-  #inputState(thread: ThreadState): RuntimeInputState {
+  #inputState(thread: ThreadState, ownsSessionChange = false): RuntimeInputState {
     return { phase: this.#statusOf(thread), compacting: thread.compactStartPending || thread.activity.compaction !== "unavailable" && thread.activity.compaction.phase === "running",
       starting: thread.turnStartPending, stopping: thread.stopping === true, closing: thread.closing === true,
-      mutating: this.#permissionUpdates.has(thread.id) || this.#permissionUnconfirmed.has(thread.id) || thread.permissionWritePromise !== undefined || this.#desktopClientProtected.has(thread.id) || thread.sessionChanging === true,
+      mutating: this.#permissionUpdates.has(thread.id) || this.#permissionUnconfirmed.has(thread.id) || thread.permissionWritePromise !== undefined || this.#desktopClientProtected.has(thread.id) || (!ownsSessionChange && thread.sessionChanging === true),
       reconciling: thread.nativeMutationPromise === undefined && (thread.reconcilePromise !== undefined || !thread.sourceReady),
       offline: this.#threads.get(thread.id) !== thread, queueDepth: thread.queue.length };
   }
@@ -1781,9 +1846,9 @@ export class CodexRuntime implements AgentBackend {
    * Caller buffers notifications and owns the generation throughout this native read.
    */
   async #hydrateNativeHistory(thread: ThreadState, snapshot: Record<string, unknown> | undefined,
-    generation: number): Promise<void> {
+    generation: number, verifiedTurns?: unknown[]): Promise<void> {
     try {
-      const turns = await this.#listAllTurns(thread.id);
+      const turns = verifiedTurns ?? await this.#listAllTurns(thread.id);
       if (!this.#isCurrentReconcile(thread, generation)) return;
       if (this.#nativeReadLagsStream(thread, turns)) return;
       this.#replayTurns(thread, { path: snapshot?.path, turns });
@@ -2380,7 +2445,7 @@ export class CodexRuntime implements AgentBackend {
     messageId?: string,
   ): boolean {
     const arg = args.trim();
-    const dynamic = thread === undefined
+    const dynamic = thread === undefined || name === "edit-message"
       ? undefined
       : this.#integrationCatalog.get(thread.cwd)?.commands.find((command) => command.name === name);
     if (dynamic === undefined && !CODEX_SLASH_COMMANDS.some(command => command.name === name)) return false;
@@ -2487,10 +2552,11 @@ export class CodexRuntime implements AgentBackend {
               : { type: "resume", sessionId: thread?.id ?? "" };
         if (thread) thread.sessionChanging = true;
         const activate = name === "fork"
-          ? this.#forkThread(thread)
+          ? this.#forkThread(thread, arg || undefined)
           : this.activate(target);
         void activate
-          .then(() => this.#commandResult(threadId, commandId, true, undefined, "success"))
+          .then(activation => this.#commandResult(threadId, commandId, true, undefined, "success",
+            name === "fork" && arg ? { sessionId: activation.sessionId } : undefined))
           .catch((error) => this.#commandResult(threadId, commandId, false, describeError(error), "failure"))
           .finally(() => { if (thread) { thread.sessionChanging = false; this.#scheduleQueue(thread); } });
         return true;
@@ -2515,6 +2581,59 @@ export class CodexRuntime implements AgentBackend {
             this.#commandResult(thread.id, commandId, false, describeError(error), unknown ? "unconfirmed" : "failure");
             if (!unknown) { thread.compactStartPending = false; clearTimeout(thread.compactStartTimer); this.#scheduleQueue(thread); }
           });
+        return true;
+      }
+      case "edit-message": {
+        if (thread === undefined) return this.#slashNoSession(threadId, commandId);
+        let payload: Record<string, unknown>;
+        try { payload = object(JSON.parse(arg)); }
+        catch { this.#commandResult(threadId, commandId, false, "Invalid message edit", "failure"); return true; }
+        const entryId = typeof payload.entryId === "string" ? payload.entryId : "";
+        const text = typeof payload.text === "string" ? payload.text.trim() : "";
+        const retryToken = typeof payload.retryToken === "string" ? payload.retryToken : undefined;
+        const entry = thread.entries.find(candidate => candidate.entryId === entryId);
+        const message = entry === undefined ? undefined : entryMessage(entry);
+        const turnId = thread.entryTurns.get(entryId);
+        const recovery = retryToken === undefined ? undefined : thread.editRecoveries.get(retryToken);
+        if (!text || /^\//u.test(text) || recovery === undefined && (message?.role !== "user" || !turnId)) {
+          this.#commandResult(threadId, commandId, false, "The selected user message is no longer editable", "failure");
+          return true;
+        }
+        // thread/revert works at turn granularity. A turn can contain an initial
+        // user message plus steer/follow-up user items; editing the latter would
+        // silently erase the whole turn, including the original prompt.
+        const turnUserEntries = turnId === undefined ? [] : thread.entries.filter(candidate =>
+          thread.entryTurns.get(candidate.entryId) === turnId && entryMessage(candidate)?.role === "user");
+        if (recovery === undefined && turnUserEntries[0]?.entryId !== entryId) {
+          this.#commandResult(threadId, commandId, false, "Only the first user message in a turn can be edited", "failure");
+          return true;
+        }
+        if (thread.turnInProgress || thread.turnStartPending || thread.waitingForApproval || thread.queue.length) {
+          this.#commandResult(threadId, commandId, false, "runtime_busy", "failure");
+          return true;
+        }
+        const source = recovery ?? thread.originalUserInputs.get(entryId);
+        if (source === undefined) {
+          this.#commandResult(threadId, commandId, false, "This message cannot be replayed safely", "failure");
+          return true;
+        }
+        const input = codexPromptInput(text, source.attachments, this.#integrationCatalog.get(thread.cwd)?.commands ?? [], source.imageUrls, source.skills);
+        thread.sessionChanging = true;
+        let rewound = false;
+        const operation = recovery === undefined
+          ? this.#revertThread(thread, turnId!, () => { rewound = true; })
+          : Promise.resolve();
+        void operation.then(async () => {
+          await this.#startTurnWithInput(thread, input, messageId ?? commandId, true);
+          if (retryToken !== undefined) thread.editRecoveries.delete(retryToken);
+          this.#commandResult(threadId, commandId, true, undefined, "success");
+        }).catch(error => {
+          if (rewound && commandId !== undefined) thread.editRecoveries.set(commandId, source);
+          this.#commandResult(threadId, commandId, false, describeError(error),
+            error instanceof CodexRequestError && error.outcome === "unconfirmed" ? "unconfirmed" : "failure",
+            { rewound, ...(rewound && commandId !== undefined ? { retryToken: commandId } : {}) });
+        })
+          .finally(() => { thread.sessionChanging = false; this.#scheduleQueue(thread); });
         return true;
       }
       case "tree": {
@@ -3033,7 +3152,7 @@ export class CodexRuntime implements AgentBackend {
    * `thread/turns/list`），所以截断后必须自己重新拉一遍。用 `itemsView: "full"` 走
    * app-server 的权威视图，而不是重新解析磁盘 rollout——rollout 什么时候落盘不由我们控制。
    */
-  async #revertThread(thread: ThreadState, beforeTurnId: string): Promise<void> {
+  async #revertThread(thread: ThreadState, beforeTurnId: string, onReverted?: () => void): Promise<void> {
     const existing = thread.revertOperations.get(beforeTurnId);
     if (existing !== undefined) return existing;
     const reverting = this.#runNativeMutation(thread, async () => {
@@ -3041,6 +3160,7 @@ export class CodexRuntime implements AgentBackend {
       await this.#queueReconcile(thread, async (generation) => {
         this.#beginSourceReconcile(thread);
         await this.#server.request("thread/revert", { threadId: thread.id, beforeTurnId });
+        onReverted?.();
         const turns = await this.#listAllTurns(thread.id);
         if (!this.#isCurrentReconcile(thread, generation)) return;
         const replayed = this.#replayTurns(thread, { turns }, true);
@@ -3139,19 +3259,20 @@ export class CodexRuntime implements AgentBackend {
    * 只服务 `/fork` 命令（用户主动开一条新线）。历史树的动作**不走这里**——那是原地 revert，
    * 不派生会话。
    */
-  async #forkThread(thread: ThreadState | undefined): Promise<BackendActivation> {
+  async #forkThread(thread: ThreadState | undefined, lastTurnId?: string): Promise<BackendActivation> {
     if (thread === undefined) throw new Error("没有活跃的 Codex 会话");
     // thread/fork 的广播同样可能先于响应到达：与 activate 一样纳入在途计数。
     this.#activating += 1;
     try {
-      return await this.#forkThreadInner(thread);
+      if (lastTurnId !== undefined && !thread.turnOrder.includes(lastTurnId)) throw new Error("Codex fork turn is unavailable");
+      return await this.#forkThreadInner(thread, lastTurnId);
     } finally {
       this.#activating -= 1;
     }
   }
 
-  async #forkThreadInner(thread: ThreadState): Promise<BackendActivation> {
-    const result = (await this.#server.request("thread/fork", { threadId: thread.id })) as {
+  async #forkThreadInner(thread: ThreadState, lastTurnId?: string): Promise<BackendActivation> {
+    const result = (await this.#server.request("thread/fork", { threadId: thread.id, ...(lastTurnId ? { lastTurnId } : {}) })) as {
       thread?: Record<string, unknown>;
       model?: unknown;
       modelProvider?: unknown;
@@ -3160,6 +3281,11 @@ export class CodexRuntime implements AgentBackend {
     const cwd = result.thread?.cwd;
     if (typeof id !== "string" || typeof cwd !== "string") {
       throw new Error("app-server 的 thread/fork 响应缺少 thread.id/cwd");
+    }
+    const verifiedTurns = lastTurnId === undefined ? undefined : await this.#listAllTurns(id);
+    if (verifiedTurns !== undefined && object(verifiedTurns.at(-1)).id !== lastTurnId) {
+      await this.#server.request("thread/archive", { threadId: id }).catch(() => {});
+      throw new Error("Codex did not fork at the selected turn");
     }
     const forked: ThreadState = this.#newThreadState(id, cwd, {
       name: codexSessionName(result.thread?.name),
@@ -3175,7 +3301,7 @@ export class CodexRuntime implements AgentBackend {
       this.#rememberDesktopThread(id);
     }
     void this.#refreshIntegrationCatalog(forked);
-    await this.#queueReconcile(forked, generation => this.#hydrateNativeHistory(forked, result.thread, generation));
+    await this.#queueReconcile(forked, generation => this.#hydrateNativeHistory(forked, result.thread, generation, verifiedTurns));
     await this.#waitForReconcile(forked);
     forked.sourceReady = forked.historyError === undefined;
     this.#publishMetadataEvent(forked);
@@ -3296,11 +3422,18 @@ export class CodexRuntime implements AgentBackend {
     text: string,
     attachments?: readonly string[],
     clientUserMessageId?: string,
+    ownsSessionChange = false,
   ): Promise<void> {
+    const commands = this.#integrationCatalog.get(thread.cwd)?.commands ?? [];
+    const input = codexPromptInput(text, attachments, commands);
+    if (clientUserMessageId !== undefined) {
+      thread.originalUserInputs.set(clientUserMessageId, originalUserInput(text, attachments, commands));
+    }
     return this.#startTurnWithInput(
       thread,
-      codexPromptInput(text, attachments),
+      input,
       clientUserMessageId,
+      ownsSessionChange,
     );
   }
 
@@ -3314,19 +3447,19 @@ export class CodexRuntime implements AgentBackend {
     });
   }
 
-  async #startTurnWithInput(thread: ThreadState, input: unknown[], clientUserMessageId?: string): Promise<void> {
+  async #startTurnWithInput(thread: ThreadState, input: unknown[], clientUserMessageId?: string, ownsSessionChange = false): Promise<void> {
     thread.turnStartPending = true;
     let captureStarted = false;
     const priorTurnId = thread.turnId;
     try {
       await this.#runNativeMutation(thread, async () => {
-        const state = { ...this.#inputState(thread), starting: false, queueDepth: 0, reconciling: !thread.sourceReady || thread.reconcilePromise !== undefined };
+        const state = { ...this.#inputState(thread, ownsSessionChange), starting: false, queueDepth: 0, reconciling: !thread.sourceReady || thread.reconcilePromise !== undefined };
         if (!canDispatchMessage(state)) throw new Error(this.#permissionInputError(thread) ?? "runtime_busy");
         if (this.beforeFileChangeTurn) {
           await this.beforeFileChangeTurn(this.runtimeIdFor(thread.id));
           captureStarted = true;
         }
-        if (this.#threads.get(thread.id) !== thread || !canDispatchMessage({ ...this.#inputState(thread), starting: false, queueDepth: 0, reconciling: !thread.sourceReady || thread.reconcilePromise !== undefined })) throw new Error(this.#permissionInputError(thread) ?? "runtime_busy");
+        if (this.#threads.get(thread.id) !== thread || !canDispatchMessage({ ...this.#inputState(thread, ownsSessionChange), starting: false, queueDepth: 0, reconciling: !thread.sourceReady || thread.reconcilePromise !== undefined })) throw new Error(this.#permissionInputError(thread) ?? "runtime_busy");
         ++thread.reconcileGeneration;
         thread.turnInProgress = true;
         this.#publishMetadataEvent(thread);
@@ -4437,6 +4570,12 @@ export class CodexRuntime implements AgentBackend {
         entries.push(entry);
         thread.sourceCommittedEntries.push(entry);
       }
+      if (part.message?.role === "user") {
+        const source = part.message.clientMessageId
+          ? thread.originalUserInputs.get(part.message.clientMessageId)
+          : originalUserInputFromItem(item);
+        if (source !== undefined) thread.originalUserInputs.set(part.entryId, source);
+      }
       thread.preparer.invalidate();
       // 知道这个条目属于哪一轮，历史树上的「从这里继续」才能换算成 revert 的轮次边界。
       if (typeof turnId === "string" && turnId.length > 0) {
@@ -4968,22 +5107,46 @@ function itemToMessage(item: Record<string, unknown>): ChatMessage | undefined {
 
 function codexUserContent(item: Record<string, unknown>): RemoteContent[] {
   const parts = Array.isArray(item.content) ? item.content.map(object) : [];
-  if (!parts.some(part => ["image", "localImage", "audio", "localAudio"].includes(String(part.type)))) {
-    return [{ type: "text", text: codexQuestionReplyText(extractContentText(item)) }];
-  }
-  return parts.flatMap((part): RemoteContent[] => {
+  if (!parts.length) return codexUserText(extractContentText(item));
+  const content = parts.flatMap((part): RemoteContent[] => {
     switch (part.type) {
       case "text": case "Text": case "output_text":
-        return typeof part.text === "string" && part.text.length ? [{ type: "text", text: codexQuestionReplyText(part.text) }] : [];
+        return typeof part.text === "string" ? codexUserText(part.text) : [];
       case "image": case "localImage": {
         const path = typeof part.path === "string" ? part.path : typeof part.localPath === "string" ? part.localPath : undefined;
+        const url = typeof part.url === "string" ? part.url : typeof part.image_url === "string" ? part.image_url : undefined;
         const fileName = path?.split(/[\\/]/u).at(-1);
-        return [{ type: "render", renderKind: "image", text: fileName || "图片", ...(path === undefined ? {} : { sourcePath: path }) }];
+        return [{ type: "render", renderKind: "image", text: fileName || "图片",
+          ...(path === undefined ? {} : { sourcePath: path }), ...(path === undefined && url ? { imageUrl: url } : {}) }];
       }
       case "audio": case "localAudio": return [{ type: "render", renderKind: "audio", text: "音频内容暂不可显示" }];
-      default: return []; // Skill/mention items bind existing user text.
+      case "skill": return [];
+      case "mention": {
+        const path = typeof part.path === "string" ? part.path : "";
+        return isAttachmentPath(path) ? [codexUserFile(path)] : [];
+      }
+      default: return [];
     }
   });
+  return content.length ? content : codexUserText(extractContentText(item));
+}
+
+function isAttachmentPath(path: string): boolean {
+  return path.length <= 4_096 && !/[\u0000-\u001f\u007f]/u.test(path) &&
+    (path.startsWith("/") || /^[a-z]:[\\/]/iu.test(path));
+}
+
+function codexUserFile(path: string): RemoteContent {
+  return { type: "render", renderKind: isImagePath(path) ? "image" : "attachment", text: path.split(/[\\/]/u).at(-1) || "附件", sourcePath: path };
+}
+
+function codexUserText(raw: string): RemoteContent[] {
+  const marker = raw.lastIndexOf(attachmentSection);
+  const files = marker < 0 ? [] : raw.slice(marker + attachmentSection.length).trimEnd().split("\n");
+  const hasFiles = files.length > 0 && files.length <= 10 && files.every(path =>
+    isAttachmentPath(path) && /[\\/]\.orbis-uploads[\\/]/iu.test(path));
+  const text = codexQuestionReplyText(hasFiles ? raw.slice(0, marker) : raw);
+  return [...(text ? [{ type: "text" as const, text }] : []), ...(hasFiles ? files.map(codexUserFile) : [])];
 }
 
 /** Accept the legacy rollout and app-server v2 text shapes. */

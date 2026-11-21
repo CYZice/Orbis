@@ -3,7 +3,6 @@ package com.orbising.orbis
 import com.orbising.orbis.OrbisBottomSheet as ModalBottomSheet
 
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -21,9 +20,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -50,63 +50,77 @@ internal fun ToolSummaryDisclosure(summary: ToolSummary, canRead: Boolean, onRea
         "cancelled" -> L10n.tr("已取消")
         else -> if (summary.isError == true) L10n.tr("执行失败") else L10n.tr("已完成")
     }
-    val rotation by animateFloatAsState(if (expanded) 180f else 0f, tween(InteractionMotion.duration(InteractionMotion.Selection)), label = "tool-disclosure")
-    var glyphActivation by remember { mutableStateOf(0) }
-    NeumorphSurface(
-        modifier = Modifier.fillMaxWidth(), style = NeumorphStyle.Pressed,
-        shape = RoundedCornerShape(14.dp), shadowScale = 0.35f, contentInset = 12.dp,
-    ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
-            Row(
-                Modifier.fillMaxWidth()
-                    .semantics { contentDescription = L10n.tr("{0}{1}，{2}", if (expanded) L10n.tr("收起") else L10n.tr("展开"), summary.toolName, phase) }
-                    .orbisKeyboardFocus().clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button) { glyphActivation++; expanded = !expanded }
-                    .heightIn(min = 40.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Icon(
-                    if (summary.isError == true) OrbisSymbols.Error else OrbisSymbols.Build,
-                    contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(17.dp).actionGlyphMotion(glyphActivation),
-                )
-                Text(summary.toolName, Modifier.weight(1f, fill = false), style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(phase, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-                Spacer(Modifier.weight(1f))
-                Icon(OrbisSymbols.KeyboardArrowDown, contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp).rotate(rotation))
-            }
-            OrbisCollapse(expanded) {
-                Column(Modifier.fillMaxWidth().padding(bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    if (summary.durationMs != null || summary.exitCode != null) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            summary.durationMs?.let { SummaryCaption(L10n.tr("耗时 {0} 秒", String.format(L10n.locale, "%.1f", it / 1000.0))) }
-                            summary.exitCode?.let { SummaryCaption(L10n.tr("退出码 {0}", it)) }
-                        }
+    Column(Modifier.fillMaxWidth()) {
+        val failed = summary.isError == true
+        ChatDisclosureRow(
+            title = summary.toolName,
+            icon = if (failed) OrbisSymbols.Error else OrbisSymbols.Build,
+            expanded = expanded,
+            onClick = { expanded = !expanded },
+            status = phase,
+            showStatus = summary.phase != "finished" || failed,
+            tint = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OrbisCollapse(expanded) {
+            Column(Modifier.fillMaxWidth().padding(bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (summary.durationMs != null || summary.exitCode != null) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        summary.durationMs?.let { SummaryCaption(L10n.tr("耗时 {0} 秒", String.format(L10n.locale, "%.1f", it / 1000.0))) }
+                        summary.exitCode?.let { SummaryCaption(L10n.tr("退出码 {0}", it)) }
                     }
-                    listOfNotNull(summary.inputSummary, summary.resultSummary, summary.errorSummary).forEach { part ->
-                        SelectionContainer {
-                            Text(part.text, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-                        }
-                        if (part.omitted) SummaryCaption(L10n.tr("已省略部分内容"))
-                    }
-                    summary.contents.filter { it.availability != "absent" }.forEach { part ->
-                        NeumorphActionButton(
-                            text = L10n.tr("查看") + toolPartTitle(part.part), icon = Icons.Rounded.FindInPage,
-                            onClick = { onReadPart(part.part) }, modifier = Modifier.fillMaxWidth(),
-                            enabled = canRead && part.readCapability != "none" && part.availability in setOf("readable", "pending"),
-                        )
-                        when (part.availability) {
-                            "temporarily-unavailable" -> SummaryCaption(L10n.tr("来源暂时无法提供此部分内容"))
-                            "unrecoverable" -> SummaryCaption(L10n.tr("此部分内容已无法恢复"))
-                        }
-                    }
-                    expandedContent?.invoke()
                 }
+                listOfNotNull(summary.inputSummary, summary.resultSummary, summary.errorSummary).forEach { part ->
+                    SelectionContainer {
+                        Text(part.text, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                    }
+                    if (part.omitted) SummaryCaption(L10n.tr("已省略部分内容"))
+                }
+                summary.contents.filter { it.availability != "absent" }.forEach { part ->
+                    NeumorphActionButton(
+                        text = L10n.tr("查看") + toolPartTitle(part.part), icon = Icons.Rounded.FindInPage,
+                        onClick = { onReadPart(part.part) }, modifier = Modifier.fillMaxWidth(),
+                        enabled = canRead && part.readCapability != "none" && part.availability in setOf("readable", "pending"),
+                    )
+                    when (part.availability) {
+                        "temporarily-unavailable" -> SummaryCaption(L10n.tr("来源暂时无法提供此部分内容"))
+                        "unrecoverable" -> SummaryCaption(L10n.tr("此部分内容已无法恢复"))
+                    }
+                }
+                expandedContent?.invoke()
             }
         }
     }
 }
+
+/** A full-width touch target with the visual weight of a single line of supporting text. */
+@Composable
+internal fun ChatDisclosureRow(
+    title: String,
+    icon: ImageVector,
+    expanded: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    status: String? = null,
+    showStatus: Boolean = true,
+    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+) {
+    val action = if (expanded) L10n.tr("收起") else L10n.tr("展开")
+    val label = if (status == null) "$action$title" else L10n.tr("{0}{1}，{2}", action, title, status)
+    Row(modifier.fillMaxWidth().semantics { contentDescription = label }
+        .orbisKeyboardFocus().clickable(role = Role.Button, onClick = onClick)
+        .heightIn(min = ToolDisclosureMinHeight),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(15.dp))
+        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
+            color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (status != null && showStatus) Text(status, style = MaterialTheme.typography.labelSmall,
+            color = tint, maxLines = 1)
+        Icon(if (expanded) Icons.Rounded.ExpandLess else OrbisSymbols.KeyboardArrowDown,
+            contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
+    }
+}
+
+private val ToolDisclosureMinHeight = 44.dp
 
 @Composable
 private fun SummaryCaption(text: String) {

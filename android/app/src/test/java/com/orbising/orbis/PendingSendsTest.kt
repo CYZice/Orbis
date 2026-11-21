@@ -195,9 +195,16 @@ class PendingSendsTest {
         val live = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }.decodeFromString(ChatMessage.serializer(),
             """{"messageId":"live-user","role":"user","clientMessageId":"app-1","content":[{"type":"text","text":"text app-1"}],"timestamp":2000}""")
         assertEquals("app-1", live.clientMessageId)
+        val upload = UploadTask("photo", "runtime-a", sourceUri = "content://photos/1", displayName = "photo.png",
+            size = 1, sha256 = "", directory = "/repo", status = "completed", remotePath = "/repo/.orbis-uploads/photo.png")
+        val draft = upload.copy(taskId = "draft")
+        state = state.copy(uploads = mapOf(upload.taskId to upload, draft.taskId to draft),
+            pendingSends = state.pendingSends + ("app-1" to state.pendingSends.getValue("app-1").copy(uploadIds = listOf(upload.taskId))))
+        assertEquals(upload, state.reconcilePendingSends(start).first.uploads[upload.taskId])
         state = state.copy(conversations = mapOf("runtime-a" to RuntimeConversation(messages = listOf(live))))
         val reconciled = state.reconcilePendingSends(start).first
         assertEquals(setOf("app-2"), reconciled.pendingSends.keys)
+        assertEquals(mapOf(draft.taskId to draft), reconciled.uploads)
 
         val offline = reducer.reduce(reconciled.copy(pendingSends = reconciled.pendingSends + ("app-3" to send("app-3", session = "session-1"))),
             """{"type":"runtime.offline","runtimeId":"runtime-a"}""")

@@ -7,6 +7,7 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.net.InetAddress
 
 class RelayPairingTest {
     @Test
@@ -17,10 +18,11 @@ class RelayPairingTest {
                 .setResponseCode(401)
                 .setBody("""{"error":"invalid_pairing_code"}"""),
         )
-        server.start()
+        // Keep the fixture deterministic under hosts that prefer IPv6.
+        server.start(InetAddress.getByName("127.0.0.1"), 0)
 
         try {
-            val relayUrl = server.url("/").toString().replaceFirst("http://", "ws://")
+            val relayUrl = "ws://127.0.0.1:${server.port}/"
             val error = runCatching { RelayClient(http = OkHttpClient()).pair(relayUrl, "PAIR1234", "Pixel") }.exceptionOrNull()
 
             assertEquals(

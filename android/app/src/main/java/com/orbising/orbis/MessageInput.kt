@@ -1,5 +1,20 @@
 package com.orbising.orbis
 
+import kotlinx.serialization.json.*
+
+internal fun messageEditPayload(entryId: String, text: String, retryToken: String? = null): String? {
+    val clean = text.trim()
+    if (clean.isEmpty() || userMessageInputError(clean) != null) return null
+    return buildJsonObject {
+        put("entryId", entryId); put("text", clean)
+        retryToken?.let { put("retryToken", it) }
+    }.toString()
+        .takeIf { it.length <= MAX_USER_MESSAGE_CHARACTERS }
+}
+
+internal fun historyEditWasRewound(result: JsonElement?): Boolean =
+    ((result as? JsonObject)?.get("rewound") as? JsonPrimitive)?.booleanOrNull == true
+
 internal data class FirstSessionSubmission(val commandId: String?)
 internal const val MAX_USER_MESSAGE_CHARACTERS = 100_000
 

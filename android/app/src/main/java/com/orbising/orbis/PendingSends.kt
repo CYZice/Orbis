@@ -201,7 +201,10 @@ internal fun RemoteState.reconcilePendingSends(now: Long): Pair<RemoteState, Set
         )
     }
     val syncs = sessions.mapNotNullTo(mutableSetOf()) { sessionId -> runtimes.entries.firstOrNull { it.value.sessionId == sessionId }?.key }
-    return (if (next === pendingSends) this else copy(pendingSends = next)) to syncs
+    if (next === pendingSends) return this to syncs
+    val retiredUploads = (pendingSends.keys - next.keys).flatMap { pendingSends.getValue(it).uploadIds }.toSet()
+    val retainedUploads = next.values.flatMap { it.uploadIds }.toSet()
+    return copy(pendingSends = next, uploads = uploads - (retiredUploads - retainedUploads)) to syncs
 }
 
 /** 队列面板：Host 队列项，加上带 `delivery` 且仍在提交中的本地行。 */

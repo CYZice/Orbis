@@ -47,7 +47,7 @@ internal fun isSupportedRelayUrl(value: String): Boolean = runCatching {
 }.getOrDefault(false)
 
 private fun isLocalRelayHost(host: String): Boolean {
-    val normalized = host.lowercase()
+    val normalized = host.lowercase().removePrefix("[").removeSuffix("]")
     if (normalized == "localhost" || normalized == "::1" || normalized.endsWith(".local")) return true
     val octets = normalized.split('.').mapNotNull(String::toIntOrNull)
     if (octets.size != 4 || octets.any { it !in 0..255 }) return false

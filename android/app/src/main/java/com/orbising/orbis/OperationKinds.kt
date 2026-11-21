@@ -738,7 +738,10 @@ internal fun RemoteState.waitingWritten(opId: String, messageId: String, runtime
     val send = pendingSends[messageId]?.takeIf { it.state is PendingSendState.Waiting } ?: return this
     val step = ledger.written(opId, now)
     return copy(pendingSends = pendingSends + (messageId to send.copy(state = PendingSendState.Sending, attachments = paths)),
-        pendingCommands = pendingCommands + (opId to runtimeId), uploads = uploads - send.uploadIds.toSet())
+        // Keep upload metadata until the authoritative user message materializes.
+        // The pending-send reconciliation then retires it with the message, while
+        // a failed/unconfirmed send can still restore the original attachment.
+        pendingCommands = pendingCommands + (opId to runtimeId))
         .withLedgerStep(LedgerStep(step.ledger.remove(opId), step.events))
 }
 

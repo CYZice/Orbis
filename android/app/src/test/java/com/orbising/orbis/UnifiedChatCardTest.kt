@@ -1,7 +1,5 @@
 package com.orbising.orbis
 
-import java.io.File
-import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -13,17 +11,14 @@ class UnifiedChatCardTest {
     } } }
     private fun text(id: String, value: String = id) = ChatMessage(id, "assistant", listOf(RemoteContent("text", value)), 0)
 
-    // S31 / SC50: native turns and one-message/many-message packing must yield the same visible steps.
-    @Test fun `all five backends use the same fixture regardless of message and turn packing`() {
-        val root = generateSequence(File(System.getProperty("user.dir"))) { it.parentFile }
-            .first { File(it, "ios/Orbis/Tests/Fixtures/chat-card-layout.json").isFile }
-        val fixture = Json.parseToJsonElement(File(root, "ios/Orbis/Tests/Fixtures/chat-card-layout.json").readText()).jsonObject
-        val steps = fixture.getValue("steps").jsonArray.map { step -> step.jsonArray.map { value ->
-            val block = value.jsonObject
-            RemoteContent(type = block.getValue("type").jsonPrimitive.content, text = block["text"]?.jsonPrimitive?.content,
-                toolCallId = block["toolCallId"]?.jsonPrimitive?.content, toolName = block["toolName"]?.jsonPrimitive?.content)
-        } }
-        val expected = fixture.getValue("expectedCards").jsonArray.map { it.jsonArray.map { it.jsonPrimitive.content } }
+    // S31 / SC50: native turns and message packing stay one continuous assistant stream.
+    @Test fun `all backends keep one continuous assistant stream regardless of packing`() {
+        val steps = listOf(
+            listOf(RemoteContent("thinking", "plan"), RemoteContent("text", "inspect"), RemoteContent("tool_call", toolCallId = "read-1", toolName = "read"), RemoteContent("tool_call", toolCallId = "bash-1", toolName = "bash")),
+            listOf(RemoteContent("thinking", "review"), RemoteContent("text", "adjust"), RemoteContent("tool_call", toolCallId = "edit-1", toolName = "edit")),
+            listOf(RemoteContent("text", "done")),
+        )
+        val expected = listOf(listOf("thinking:plan", "text:inspect", "tool:read-1", "tool:bash-1", "thinking:review", "text:adjust", "tool:edit-1", "text:done"))
         val perStep = steps.mapIndexed { index, blocks -> ChatMessage("step-$index", "assistant", blocks, 0) }
         val perBlock = steps.flatten().mapIndexed { index, block -> ChatMessage("block-$index", "assistant", listOf(block), 0) }
         val bundled = listOf(ChatMessage("bundled", "assistant", steps.flatten(), 0))
@@ -34,9 +29,9 @@ class UnifiedChatCardTest {
             assertEquals(backend, expected, signature(rows(messages)))
         }
         val result = rows(bundled)
-        assertEquals(listOf(emptySet<String>(), emptySet(), setOf("bundled")), result.map { it.completedMessageIds })
-        assertEquals(2, assistantCardContent(result[0].messages).items.filterIsInstance<AssistantCardItem.ToolGroup>().sumOf { it.calls.size })
-        assertEquals(1, assistantCardContent(result[1].messages).items.filterIsInstance<AssistantCardItem.ToolGroup>().sumOf { it.calls.size })
+        assertEquals(setOf("bundled"), result.single().completedMessageIds)
+        assertEquals(listOf(2, 1), assistantCardContent(result.single().messages).items
+            .filterIsInstance<AssistantCardItem.ToolGroup>().map { it.calls.size })
     }
 
     // A large parallel batch stays one collapsed group with bounded local paging, not dozens of frames.

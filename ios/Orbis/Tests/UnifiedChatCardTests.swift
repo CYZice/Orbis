@@ -12,21 +12,24 @@ struct UnifiedChatCardTests {
         ChatMessage(messageId: id, role: "assistant", content: [ChatContent(type: "text", text: id, toolName: nil, artifact: nil)], timestamp: 0, isError: nil)
     }
 
-    // S31 / SC50: the exact same fixture is read by Android; turn labels and message packing are irrelevant.
-    @Test func allBackendsShareVisualStepsForNativeMessagesAndBlocks() throws {
-        struct Fixture: Decodable { let steps: [[ChatContent]]; let expectedCards: [[String]] }
-        let url = try #require(Bundle.module.url(forResource: "chat-card-layout", withExtension: "json", subdirectory: "Fixtures"))
-        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+    // S31 / SC50: native turns and message packing stay one continuous assistant stream.
+    @Test func allBackendsKeepOneContinuousAssistantStream() {
+        let steps: [[ChatContent]] = [
+            [ChatContent(type: "thinking", text: "plan", toolName: nil, artifact: nil), ChatContent(type: "text", text: "inspect", toolName: nil, artifact: nil), ChatContent(type: "tool_call", text: nil, toolName: "read", artifact: nil, toolCallId: "read-1"), ChatContent(type: "tool_call", text: nil, toolName: "bash", artifact: nil, toolCallId: "bash-1")],
+            [ChatContent(type: "thinking", text: "review", toolName: nil, artifact: nil), ChatContent(type: "text", text: "adjust", toolName: nil, artifact: nil), ChatContent(type: "tool_call", text: nil, toolName: "edit", artifact: nil, toolCallId: "edit-1")],
+            [ChatContent(type: "text", text: "done", toolName: nil, artifact: nil)],
+        ]
+        let expected = [["thinking:plan", "text:inspect", "tool:read-1", "tool:bash-1", "thinking:review", "text:adjust", "tool:edit-1", "text:done"]]
         func message(_ id: String, _ content: [ChatContent]) -> ChatMessage {
             ChatMessage(messageId: id, role: "assistant", content: content, timestamp: 0, isError: nil)
         }
-        let perStep = fixture.steps.enumerated().map { message("step-\($0.offset)", $0.element) }
-        let perBlock = fixture.steps.flatMap { $0 }.enumerated().map { message("block-\($0.offset)", [$0.element]) }
-        let bundled = [message("bundled", fixture.steps.flatMap { $0 })]
+        let perStep = steps.enumerated().map { message("step-\($0.offset)", $0.element) }
+        let perBlock = steps.flatMap { $0 }.enumerated().map { message("block-\($0.offset)", [$0.element]) }
+        let bundled = [message("bundled", steps.flatMap { $0 })]
         for (backend, messages) in [("pi", perStep), ("dsh", bundled), ("claude", perBlock), ("codex", perBlock), ("codexDesktop", perStep)] {
             let anchors = Dictionary(uniqueKeysWithValues: messages.map { ($0.messageId, "native-" + $0.messageId) })
-            #expect(signature(chatRows(messages, turnIdsByMessageId: anchors)) == fixture.expectedCards, "\(backend)")
-            #expect(signature(chatRows(messages)) == fixture.expectedCards, "\(backend)")
+            #expect(signature(chatRows(messages, turnIdsByMessageId: anchors)) == expected, "\(backend)")
+            #expect(signature(chatRows(messages)) == expected, "\(backend)")
         }
         let rows = chatRows(bundled)
         #expect(rows.map(\.completedIds) == [[], [], ["bundled"]])

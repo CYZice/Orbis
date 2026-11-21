@@ -356,10 +356,10 @@ class ChatViewportInstrumentedTest {
         compose.runOnIdle { results.value = mapOf("call" to text("call:result", "tool", "canonical result body")) }
         compose.onNodeWithText("canonical result body", substring = true).assertIsDisplayed()
         compose.onNodeWithText("bash").performClick()
-        compose.onNodeWithText("思考").performClick()
+        compose.onNodeWithText("思考过程").performClick()
         compose.runOnIdle { messages.value = listOf(thinking.copy(content = listOf(RemoteContent("thinking", "thinking prefix plus suffix"))), tool("call")) }
         compose.onNodeWithText("thinking prefix plus suffix").assertIsDisplayed()
-        compose.onNodeWithContentDescription("收起").assertIsDisplayed()
+        compose.onNodeWithContentDescription("收起思考过程").assertIsDisplayed()
     }
 
     @Test fun turnChangeSummaryFollowsTheWholeTurnWhenAnchoredInsideIt() {

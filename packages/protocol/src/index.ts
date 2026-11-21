@@ -548,6 +548,8 @@ export const RemoteContentSchema = z.discriminatedUnion("type", [
     file: MessageFileReferenceSchema.optional(),
     /** Host-only canonical source for image projection; DeviceMessageRendering replaces it with `file`. */
     sourcePath: z.string().min(1).max(4096).optional(),
+    /** Remote/data image input preserved for clients that can render it directly. */
+    imageUrl: z.string().max(2_000_000).optional(),
     purpose: z.literal("output").optional(),
   }),
 ]);

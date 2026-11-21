@@ -182,6 +182,9 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -212,8 +215,6 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -1603,6 +1604,14 @@ internal fun ChatScreen(
     val rewindCommands = state.capabilities[runtimeId]?.commands.orEmpty()
     val rewindGraph = sessionId?.let(state.sessionGraphs::get)
     val rewindOptions = remember(rewindCommands, rewindGraph?.display) { userMessageRewindOptions(rewindCommands, rewindGraph) }
+    val editableEntries = remember(rewindGraph) {
+        rewindGraph?.let { graph ->
+            buildSessionPath(graph.entries, graph.cursor.leafId).mapNotNull { entry ->
+                val message = graph.display[entry.entryId]?.message
+                message?.takeIf { it.role == "user" }?.let { it.messageId to entry.entryId }
+            }.toMap()
+        }.orEmpty()
+    }
     val activeTurn = conversation.activeTurnId?.let(conversation.turnTimings::get)
     var timerNow by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(activeTurn?.turnId, activeTurn?.startedAt) {
@@ -1623,6 +1632,15 @@ internal fun ChatScreen(
         state.e2eReady && conversation.sourceReady && !conversation.isChatSyncing))
     val messageTurnTimings = projection?.timings.orEmpty()
     val turnIdsByMessageId = projection?.turnIds.orEmpty()
+    val firstUserMessageIds = remember(chatItems, turnIdsByMessageId) {
+        val seenTurns = mutableSetOf<String>()
+        chatItems.mapNotNull { item ->
+            (item as? ChatListItem.UserMessage)?.message?.let { message ->
+                val turn = turnIdsByMessageId[message.messageId] ?: return@let null
+                if (!seenTurns.add(turn)) null else message.messageId
+            }
+        }.toSet()
+    }
     val turnChangeProjection = rememberTurnChangePresentation(TurnChangePresentationRequest(
         TurnChangePresentationIdentity(runtimeId, pageSessionId, state.sessionBranchGenerations[runtimeId] ?: 0),
         projection?.items.orEmpty(), turnIdsByMessageId,
@@ -1757,7 +1775,14 @@ internal fun ChatScreen(
     var input by remember(runtimeId, sessionId, state.deviceId) {
         mutableStateOf(model.loadDraft(runtimeId))
     }
-    val composerMode = composerAction(isWorking = runtime?.status == "running", input = if (kimiCode) "" else input)
+    var fieldValue by remember(runtimeId, sessionId, state.deviceId) {
+        mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(input, androidx.compose.ui.text.TextRange(input.length)))
+    }
+    val composerFocus = remember(runtimeId, sessionId) { FocusRequester() }
+    val composerKeyboard = LocalSoftwareKeyboardController.current
+    fun focusComposer() { composerFocus.requestFocus(); composerKeyboard?.show() }
+    val composerField = if (fieldValue.text == input) fieldValue
+        else androidx.compose.ui.text.input.TextFieldValue(input, androidx.compose.ui.text.TextRange(input.length))
     var selectedSlashCommandName by remember(runtimeId) { mutableStateOf<String?>(null) }
     var modelConfigurationOpen by remember(runtimeId) { mutableStateOf(false) }
     var modelConfigurationSetting by remember(runtimeId) { mutableStateOf<String?>(null) }
@@ -1811,20 +1836,91 @@ internal fun ChatScreen(
     val runtimeUploads = state.uploads.values.filter { it.runtimeId == runtimeId }
     val attachedUploads = runtimeUploads.filter { it.taskId in attachedTaskIds }
     val attachablePaths = attachedUploads.filter { it.status == "completed" }.mapNotNull(UploadTask::remotePath)
+    val composerMode = composerAction(isWorking = runtime?.status == "running",
+        input = if (kimiCode) "" else if (input.isBlank() && attachedUploads.isNotEmpty()) "+" else input)
+    fun sendComposerMessage(delivery: String? = null): String? {
+        val id = model.sendMessage(input, delivery, attachablePaths, attachedTaskIds.toList()) ?: return null
+        updateAttachedTaskIds(emptySet())
+        return id
+    }
     // 基础协议支持附件路径，不使用 `messageAttachments` 能力位（ADR-0012）。
     val canAttachFiles = !kimiCode && runtime != null && state.hostId != null
-    val filePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenMultipleDocuments(),
-    ) { uris ->
-        uris.take(MAX_ATTACHMENTS_PER_MESSAGE).forEach { uri ->
-            // 登记完立刻把任务挂到 composer 的附件 chip 上——上传进度必须可见，
-            // 否则用户不知道文件正在传、也不知道为什么发送键是灰的。
-            model.queueUpload(uri, runtimeId) { taskId -> updateAttachedTaskIds(attachedTaskIds + taskId) }
+    val composerCommands = state.capabilities[runtimeId]?.commands.orEmpty()
+    var editEntryId by rememberSaveable(runtimeId, sessionId) { mutableStateOf<String?>(null) }
+    var editText by rememberSaveable(runtimeId, sessionId) { mutableStateOf("") }
+    var editCommandId by rememberSaveable(runtimeId, sessionId) { mutableStateOf<String?>(null) }
+    var editError by rememberSaveable(runtimeId, sessionId) { mutableStateOf<String?>(null) }
+    var editRetryToken by rememberSaveable(runtimeId, sessionId) { mutableStateOf<String?>(null) }
+    var reservedAttachmentSlots by rememberSaveable(runtimeId, sessionId) { mutableIntStateOf(0) }
+    val canEditMessage = runtime?.isCodex == true && runtime.status == "idle" && state.e2eReady &&
+        conversation.sourceReady && conversation.queuedMessages.isEmpty() &&
+        composerCommands.any { it.name == "edit-message" }
+    LaunchedEffect(editCommandId, state.commandResults) {
+        val id = editCommandId ?: return@LaunchedEffect
+        val receipt = state.commandResults[id] ?: return@LaunchedEffect
+        editCommandId = null
+        model.consumeCommandResult(id)
+        if (receipt.ok) {
+            editEntryId = null
+            editText = ""
+            editRetryToken = null
+            model.refreshAfterBranchAction(runtimeId)
+        } else {
+            editError = receipt.error?.let { L10n.hostText(it) } ?: L10n.tr("编辑重发未成功")
+            if (historyEditWasRewound(receipt.result)) {
+                editRetryToken = (receipt.result as? kotlinx.serialization.json.JsonObject)
+                    ?.get("retryToken")?.jsonPrimitive?.contentOrNull
+                model.refreshAfterBranchAction(runtimeId)
+                commandFeedback = if (receipt.status == "unconfirmed") {
+                    L10n.tr("已回退。重发结果待确认，请先核对对话。")
+                } else {
+                    L10n.tr("已回退，但未能重发。可以在当前编辑框中再次发送。")
+                }
+                commandFeedbackTransient = false
+            }
         }
-        if (uris.size > MAX_ATTACHMENTS_PER_MESSAGE) {
+    }
+    val canForkReply = runtime?.isCodex == true && runtime.status == "idle" && state.e2eReady &&
+        composerCommands.any { it.name == "fork" && it.argument?.kind == "text" }
+    var forkCommandId by rememberSaveable(runtimeId, sessionId) { mutableStateOf<String?>(null) }
+    LaunchedEffect(forkCommandId, state.commandResults) {
+        val id = forkCommandId ?: return@LaunchedEffect
+        val receipt = state.commandResults[id] ?: return@LaunchedEffect
+        forkCommandId = null
+        model.consumeCommandResult(id)
+        val forkedSessionId = (receipt.result as? kotlinx.serialization.json.JsonObject)?.get("sessionId")?.jsonPrimitive?.contentOrNull
+        if (receipt.ok && !forkedSessionId.isNullOrBlank()) {
+            val forkedRuntime = state.runtimes.values.firstOrNull { it.sessionId == forkedSessionId }
+            if (forkedRuntime != null) model.selectRuntime(forkedRuntime.runtimeId) else model.activateSession(forkedSessionId)
+        } else {
+            commandFeedbackTransient = false
+            commandFeedback = L10n.tr("创建分支失败：{0}", receipt.error ?: L10n.tr("未知错误"))
+        }
+    }
+    val canPickSkill = runtime?.isCodex == true && composerCommands.any { it.source == "skill" }
+    fun queueAttachments(uris: List<android.net.Uri>) {
+        val remaining = (MAX_ATTACHMENTS_PER_MESSAGE - attachedTaskIds.size - reservedAttachmentSlots).coerceAtLeast(0)
+        val selected = uris.distinct().take(remaining)
+        reservedAttachmentSlots += selected.size
+        selected.forEach { uri ->
+            model.queueUpload(uri, runtimeId, { taskId ->
+                updateAttachedTaskIds(model.attachedTaskIds(sessionKey) + taskId)
+            }, { reservedAttachmentSlots = (reservedAttachmentSlots - 1).coerceAtLeast(0) })
+        }
+        if (uris.size > remaining) {
             commandFeedbackTransient = false
             commandFeedback = L10n.tr("一次最多发送 {0} 个文件", MAX_ATTACHMENTS_PER_MESSAGE)
         }
+    }
+    fun applyComposerText(value: String) {
+        showDeliveryChoices = false
+        input = value
+        model.saveDraft(runtimeId, value)
+        if (!matchesSelectedSlashCommand(value, selectedSlashCommandName)) selectedSlashCommandName = null
+    }
+    fun applyComposerField(value: androidx.compose.ui.text.input.TextFieldValue) {
+        fieldValue = value
+        if (input != value.text) applyComposerText(value.text)
     }
     // Refresh replaces the visible conversation with a fresh projection. Remember the row the
     // user is looking at so the viewport can stay put instead of jumping to the newest message.
@@ -2116,6 +2212,29 @@ internal fun ChatScreen(
         pendingMessageText = ""
     }
 
+    editEntryId?.let { entryId ->
+        val busy = editCommandId != null
+        val payload = remember(entryId, editText, editRetryToken) { messageEditPayload(entryId, editText, editRetryToken) }
+        AlertDialog(
+            onDismissRequest = { if (!busy) editEntryId = null },
+            title = { Text(L10n.tr("编辑并重发")) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(editText, { editText = it; editError = null },
+                        Modifier.fillMaxWidth().testTag("edit-user-message-input"), enabled = !busy, minLines = 2, maxLines = 7)
+                    Text(L10n.tr("重发会替换这条消息，并从这里重新开始后续对话。"), style = MaterialTheme.typography.bodySmall)
+                    editError?.let { InlineFeedbackError(it) }
+                }
+            },
+            dismissButton = { NeumorphTextButton(L10n.tr("取消"), { editEntryId = null }, enabled = !busy) },
+            confirmButton = { NeumorphTextButton(L10n.tr("重新发送"), {
+                if (payload != null) {
+                    editCommandId = executeSlash("edit-message", payload)
+                    if (editCommandId == null) editError = L10n.tr("编辑重发未成功")
+                }
+            }, enabled = canEditMessage && !busy && payload != null, filled = true, dismissOnClick = false) },
+        )
+    }
     if (modelConfigurationOpen) SessionModelConfigurationSheet(state, runtimeId,
         onClose = { modelConfigurationOpen = false; modelConfigurationSetting = null },
         setting = modelConfigurationSetting, onSettingChange = { modelConfigurationSetting = it },
@@ -2231,7 +2350,7 @@ internal fun ChatScreen(
                                 text = queuedMessageDeliveryText("followUp"),
                                 onClick = {
                                     showDeliveryChoices = false
-                                    submitMessage(model.sendMessage(input, "followUp"))
+                                    submitMessage(sendComposerMessage("followUp"))
                                 },
                                 enabled = pendingMessageCommandId == null,
                                 filled = true,
@@ -2241,7 +2360,7 @@ internal fun ChatScreen(
                                 text = queuedMessageDeliveryText("steer"),
                                 onClick = {
                                     showDeliveryChoices = false
-                                    submitMessage(model.sendMessage(input, "steer"))
+                                    submitMessage(sendComposerMessage("steer"))
                                 },
                                 enabled = pendingMessageCommandId == null,
                                 filled = true,
@@ -2273,6 +2392,10 @@ internal fun ChatScreen(
                             model.saveDraft(runtimeId, invocation)
                         },
                     )
+                    if (canPickSkill) ComposerSkillPicker(composerField, composerCommands) { value ->
+                        applyComposerField(value)
+                        focusComposer()
+                    }
                     conversation.operationError?.takeIf(String::isNotBlank)?.let { InlineFeedbackError(it) }
                     optionCommand?.let { state.menuOptionErrors[runtimeId + ":" + it] }?.let { InlineFeedbackError(it) }
                     ComposerContextNotice(composerStatus(runtime))
@@ -2315,26 +2438,27 @@ internal fun ChatScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                     if (canAttachFiles) {
-                        NeumorphIconButton(
-                            onClick = { filePicker.launch(arrayOf("*/*")) },
-                            icon = OrbisSymbols.AttachFile,
-                            contentDescription = L10n.tr("发送文件到电脑"),
-                            enabled = attachedTaskIds.size < MAX_ATTACHMENTS_PER_MESSAGE,
+                        ComposerAddMenu(
+                            attachmentEnabled = attachedTaskIds.size + reservedAttachmentSlots < MAX_ATTACHMENTS_PER_MESSAGE,
+                            conversationKey = sessionKey,
+                            onPick = ::queueAttachments,
+                            onError = { commandFeedbackTransient = false; commandFeedback = it },
+                            onSkills = if (canPickSkill && !input.trimStart().startsWith("/")) ({
+                                applyComposerText(input.trimEnd().let { if (it.isEmpty()) "$" else "$it $" })
+                                focusComposer()
+                            }) else null,
+                            onCommands = if (composerCommands.isNotEmpty() && input.isBlank()) ({
+                                applyComposerText("/")
+                                focusComposer()
+                            }) else null,
                             modifier = Modifier.padding(bottom = 4.dp),
                         )
                     }
                     OutlinedTextField(
-                        value = input,
-                        onValueChange = { value ->
-                            showDeliveryChoices = false
-                            input = value
-                            model.saveDraft(runtimeId, value)
-                            if (!matchesSelectedSlashCommand(value, selectedSlashCommandName)) {
-                                selectedSlashCommandName = null
-                            }
-                        },
-                        modifier = Modifier.weight(1f).onGloballyPositioned { sendFlight.composer = it.boundsInWindow() },
-                        placeholder = { Text(L10n.tr("发给 {0}，/ 命令", LocalAgentBrand.current.title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        value = composerField,
+                        onValueChange = ::applyComposerField,
+                        modifier = Modifier.weight(1f).focusRequester(composerFocus).onGloballyPositioned { sendFlight.composer = it.boundsInWindow() },
+                        placeholder = { Text(if (canPickSkill) L10n.tr("发给 {0}，/ 命令，$ 技能", LocalAgentBrand.current.title) else L10n.tr("发给 {0}，/ 命令", LocalAgentBrand.current.title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         enabled = runtime != null || launchOpen,
                         minLines = 1,
                         maxLines = 5,
@@ -2342,11 +2466,9 @@ internal fun ChatScreen(
                     // 两侧按钮保持 48dp 触控区；输入框承担剩余宽度，多行输入时按钮贴底对齐。
                     val sendEnabled = when (composerMode) {
                         ComposerAction.Abort -> runtime != null
-                        ComposerAction.Send -> (runtime != null || launchOpen) && canSubmitInput(
-                            input,
-                            state.capabilities[runtimeId]?.commands.orEmpty(),
-                            selectedSlashCommandName,
-                        ) && pendingMessageCommandId == null &&
+                        ComposerAction.Send -> (runtime != null || launchOpen) &&
+                            (canSubmitInput(input, composerCommands, selectedSlashCommandName) ||
+                                input.isBlank() && attachedUploads.isNotEmpty()) && pendingMessageCommandId == null &&
                             // ADR-0049 §6.2：附件还在上传也可以发送，消息先等上传完成；失败或取消的附件需要先处理。
                             attachedUploads.none { it.status == "failed" || it.status == "cancelled" }
                     }
@@ -2390,20 +2512,12 @@ internal fun ChatScreen(
                                         } else if (runtime?.status == "running" && runtime.agentKind == "claude") {
                                             // Claude Code 只有「等当前回合结束后提交」，没有 Steer 可选。
                                             showDeliveryChoices = false
-                                            submitMessage(model.sendMessage(input, "followUp"))
+                                            submitMessage(sendComposerMessage("followUp"))
                                         } else if (runtime?.status == "running") {
                                             showDeliveryChoices = true
                                         } else {
                                             showDeliveryChoices = false
-                                            val commandId = model.sendMessage(input, attachments = attachablePaths,
-                                                uploadTaskIds = attachedTaskIds.toList())
-                                            // 附件已经交给消息，chip 就不该继续挂在输入框上；仍在上传的继续上传，
-                                            // 写入通道后再从上传列表移走（ADR-0049 §6.2）。
-                                            if (commandId != null) {
-                                                if (attachedUploads.all { it.status == "completed" }) model.detachUploads(attachedTaskIds)
-                                                updateAttachedTaskIds(emptySet())
-                                            }
-                                            submitMessage(commandId)
+                                            submitMessage(sendComposerMessage())
                                         }
                                     }
                                 }
@@ -2541,8 +2655,19 @@ internal fun ChatScreen(
                                 }
                             },
                             downloads = rowResources?.rows?.get(item.key)?.downloads.orEmpty(),
+                            previewImage = if (state.e2eReady && !kimiCode) ({ path -> model.downloadFile(path, previewOnly = true) }) else null,
                             downloadArtifact = { artifact -> if (model.downloadArtifact(artifact)) chatFlight.launch() },
                             downloadFile = { path -> if (model.downloadFile(path)) chatFlight.launch() },
+                            onEdit = if (canEditMessage && item.message.messageId in firstUserMessageIds && state.pendingSends[item.message.messageId] == null) {
+                                editableEntries[item.message.messageId]?.let { entryId ->
+                                    {
+                                        editText = item.message.content.filter { it.type == "text" }.mapNotNull { it.text }.joinToString("\n")
+                                        editError = null
+                                        editRetryToken = null
+                                        editEntryId = entryId
+                                    }
+                                }
+                            } else null,
                             onRewind = rewindOptions[item.message.messageId]?.let { option ->
                                 { runHistoryAction(HistoryTreeAction.EditAndRestart(option.value, item.message.content.mapNotNull { it.text }.joinToString("\n"))) }
                             },
@@ -2550,6 +2675,12 @@ internal fun ChatScreen(
                         )
 
                         is ChatListItem.AssistantTurn -> AssistantTurnCard(
+                            onFork = if (canForkReply && forkCommandId == null) {
+                                item.completedMessageIds.mapNotNull { messageTurnTimings[it] }
+                                    .filter { it.durationMs != null }.maxByOrNull { it.startedAt }?.turnId?.let { turnId ->
+                                        { forkCommandId = executeSlash("fork", turnId) }
+                                    }
+                            } else null,
                             cardId = item.key,
                             runtimeId = runtimeId,
                             messages = item.messages,
@@ -2718,7 +2849,7 @@ private fun SlashCommandPicker(
 
     val query = invocation.lowercase()
     val matches = commands
-        .filter { it.name.lowercase().startsWith(query) }
+        .filter { it.name != "edit-message" && it.name.lowercase().startsWith(query) }
         .sortedWith(compareBy<RuntimeSlashCommand> { it.source != "builtin" }.thenBy { it.name })
     if (matches.isEmpty()) return
     LazyColumn(
@@ -2890,7 +3021,7 @@ internal fun AllDownloadsScreen(
     var selectedTaskIds by remember(state.hostId) { mutableStateOf<Set<String>>(emptySet()) }
     val selectionHaptic = LocalHapticFeedback.current
     var pendingDeletion by remember(state.hostId) { mutableStateOf<Set<String>>(emptySet()) }
-    val downloads = state.downloads.values.sortedByDescending(ArtifactDownload::createdAt)
+    val downloads = state.downloads.values.filterNot(ArtifactDownload::previewOnly).sortedByDescending(ArtifactDownload::createdAt)
     val visibleTaskIds = downloads.mapTo(mutableSetOf(), ArtifactDownload::taskId)
     val effectiveSelectedTaskIds = selectedTaskIds.intersect(visibleTaskIds)
     val selectionMode = effectiveSelectedTaskIds.isNotEmpty()
@@ -3558,19 +3689,6 @@ private fun statusToneColor(tone: StatusTone): Color = when (tone) {
 }
 
 @Composable
-private fun TurnStartLabel(startedAt: Long) {
-    val startTime = remember(startedAt) {
-        SimpleDateFormat("HH:mm:ss", L10n.locale).format(Date(startedAt))
-    }
-    Text(
-        text = L10n.tr("开始 {0}", startTime),
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-    )
-}
-
-@Composable
 private fun TurnDurationLabel(timing: TurnTiming, nowMs: Long) {
     val active = timing.durationMs == null
     val durationMs = timing.durationMs ?: max(0L, nowMs - timing.startedAt)
@@ -3770,6 +3888,8 @@ internal fun UserMessageCard(
     uploads: List<UploadTask> = emptyList(),
     canResend: Boolean = false,
     onPendingAction: (PendingSendAction) -> Unit = {},
+    previewImage: ((String) -> Unit)? = null,
+    onEdit: (() -> Unit)? = null,
 ) {
     // 右对齐、按内容收窄的气泡，最宽 85%：位置已说明是谁发的，不再加「你」（与 iOS 一致）。
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -3777,7 +3897,7 @@ internal fun UserMessageCard(
         Column(Modifier.weight(0.85f, fill = false), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
             MessageActions(id = "$runtimeId:${message.messageId}",
                 text = message.content.mapNotNull { it.text }.joinToString("\n"), rewindEnabled = rewindEnabled,
-                onRewind = if (pending == null) onRewind else null) { openActions ->
+                onRewind = if (pending == null) onRewind else null, onEdit = if (pending == null) onEdit else null) { openActions ->
             NeumorphSurface(modifier = Modifier.messageSendFlightTarget(message.clientMessageId ?: message.messageId),
                 style = NeumorphStyle.Pressed, shadowScale = 0.55f, contentPadding = 14.dp,
                 onClick = {}, onLongClick = openActions) {
@@ -3787,6 +3907,7 @@ internal fun UserMessageCard(
                         runtimeId = runtimeId,
                         message = message,
                         downloads = downloads,
+                        previewImage = previewImage,
                         downloadArtifact = downloadArtifact,
                         downloadFile = downloadFile,
                     )
@@ -3796,6 +3917,10 @@ internal fun UserMessageCard(
             }
             if (pending != null) {
                 PendingSendStatus(pending, canResend, onPendingAction)
+            } else if (onEdit != null) {
+                NeumorphIconButton(onClick = onEdit, icon = Icons.Rounded.Edit,
+                    contentDescription = L10n.tr("编辑并重发"), size = 28.dp, compact = true,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -3862,6 +3987,7 @@ internal fun AssistantTurnCard(
     replyArrivals: ReplyCardArrivals? = null,
     copyMessages: List<ChatMessage> = messages,
     cardId: String = messages.first().messageId,
+    onFork: (() -> Unit)? = null,
     fileChanges: @Composable () -> Unit = {},
 ) {
     val motionParts = remember(messages) { messages.flatMap { message -> message.content.mapIndexed { index, block ->
@@ -3869,18 +3995,7 @@ internal fun AssistantTurnCard(
     } } }
     val content = remember(messages) { assistantCardContent(messages) }
     GrowingReplyCard(cardId, motionParts, messages.any { it.messageId in streamingMessageIds }, replyArrivals) {
-        Column(Modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                AgentLabel(LocalAgentBrand.current)
-                Spacer(Modifier.weight(1f))
-                turnTiming?.let { TurnStartLabel(it.startedAt) }
-                // 整段回复的复制入口，与 iOS 卡片右上角一致。
-                if (copyMessages.any { message -> message.content.any { it.type == "render" || it.type == "text" && !it.text.isNullOrBlank() } }) {
-                    CopyIconButton(L10n.tr("复制回复"), size = 30.dp) {
-                        copyMessages.flatMap { message -> message.content.mapNotNull(RemoteContent::replyCopyText) }.joinToString("\n\n")
-                    }
-                }
-            }
+        Column(Modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             content.items.forEachIndexed { index, item ->
                 when (item) {
                     is AssistantCardItem.Message -> key(runtimeId, "message:$index:${item.message.messageId}") {
@@ -3902,8 +4017,21 @@ internal fun AssistantTurnCard(
                     }
                 }
             }
-            turnTiming?.let { TurnDurationLabel(it, nowMs) }
             fileChanges()
+            val copyText = remember(copyMessages) {
+                copyMessages.flatMap { it.content.mapNotNull(RemoteContent::replyCopyText) }.joinToString("\n\n")
+            }
+            val complete = turnTiming?.durationMs != null || turnTiming == null && streamingMessageIds.isEmpty()
+            if (turnTiming != null || complete && (copyText.isNotBlank() || onFork != null)) {
+                Row(Modifier.fillMaxWidth().testTag("reply-footer"), verticalAlignment = Alignment.CenterVertically) {
+                    if (complete && copyText.isNotBlank()) CopyIconButton(L10n.tr("复制回复"), size = 36.dp) { copyText }
+                    if (complete && onFork != null) androidx.compose.material3.IconButton(onClick = onFork, modifier = Modifier.size(40.dp)) {
+                        Icon(OrbisSymbols.Fork, contentDescription = L10n.tr("从这条回复创建分支"), modifier = Modifier.size(18.dp))
+                    }
+                    Spacer(Modifier.weight(1f))
+                    turnTiming?.let { TurnDurationLabel(it, nowMs) }
+                }
+            }
         }
     }
 }
@@ -3936,9 +4064,10 @@ private fun ChatToolGroup(
     }
     if (calls.size == 1) { callView(calls.first()); return }
     Column(Modifier.fillMaxWidth()) {
-        NeumorphTextButton(text = L10n.tr("{0} 次工具调用，{1}", calls.size, status),
-            icon = if (expanded) Icons.Rounded.ExpandLess else OrbisSymbols.KeyboardArrowDown,
-            onClick = { expanded = !expanded }, modifier = Modifier.fillMaxWidth().testTag("chat-tool-group"))
+        ChatDisclosureRow(title = L10n.tr("{0} 次工具调用", calls.size), icon = OrbisSymbols.Build,
+            expanded = expanded, onClick = { expanded = !expanded }, modifier = Modifier.testTag("chat-tool-group"),
+            status = status, showStatus = running || failed,
+            tint = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
         OrbisCollapse(expanded) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 calls.take(visible).forEach { callView(it) }
@@ -3989,6 +4118,7 @@ private fun MessageBlocks(
     downloads: Map<String, ArtifactDownload>,
     downloadArtifact: (RemoteArtifact) -> Unit,
     downloadFile: (String) -> Unit,
+    previewImage: ((String) -> Unit)? = null,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         message.content.forEachIndexed { index, block ->
@@ -3996,12 +4126,20 @@ private fun MessageBlocks(
             if (block.type == "render") {
                 val action = block.messageFileAction()
                 if (action != null) {
-                    val download = downloads.values.firstOrNull { it.sourcePath == action }
+                    val download = downloads.values.filter { it.sourcePath == action }
+                        .firstOrNull { it.previewOnly == (previewImage != null) }
+                        ?: downloads.values.firstOrNull { it.sourcePath == action }
                     if (isImageFileName(block.file?.fileName)) {
-                        ImageReferenceCard(block, download, onDownload = { downloadFile(action) })
+                        ImageReferenceCard(block, download,
+                            onDownload = { downloadFile(action) },
+                            onPreview = previewImage?.let { preview -> { preview(action) } },
+                            autoPreview = previewImage != null,
+                        )
                     } else {
                         MessageReferenceCard(block, download, onDownload = { downloadFile(action) })
                     }
+                } else if (block.renderKind == "image" && block.imageUrl != null) {
+                    InlineImageCard(block.text ?: L10n.tr("图片"), block.imageUrl)
                 } else {
                     Text(block.messageRenderLabel(), color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelMedium, modifier = Modifier.testTag("message-content-placeholder"))
@@ -4045,16 +4183,53 @@ private fun MessageBlocks(
     }
 }
 
+@Composable
+private fun InlineImageCard(label: String, imageUrl: String) {
+    var enlarged by rememberSaveable(imageUrl) { mutableStateOf(false) }
+    NeumorphSurface(
+        onClick = { enlarged = true },
+        shape = RemoteUi.ControlShape,
+        modifier = Modifier.fillMaxWidth().testTag("message-inline-image"),
+    ) {
+        AsyncImage(
+            model = imageUrl,
+            contentDescription = label,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp, max = 320.dp).padding(8.dp),
+            contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+        )
+    }
+    if (enlarged) androidx.compose.ui.window.Dialog(onDismissRequest = { enlarged = false }) {
+        Surface(shape = RemoteUi.ControlShape, color = MaterialTheme.colorScheme.surface) {
+            AsyncImage(
+                model = imageUrl,
+                contentDescription = label,
+                modifier = Modifier.fillMaxWidth().heightIn(max = 640.dp).padding(12.dp),
+                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+            )
+        }
+    }
+}
+
 private fun isImageFileName(name: String?): Boolean =
     name?.matches(Regex(".*\\.(avif|bmp|gif|heic|jpe?g|png|tiff?|webp)$", RegexOption.IGNORE_CASE)) == true
 
 @Composable
-private fun ImageReferenceCard(block: RemoteContent, download: ArtifactDownload?, onDownload: () -> Unit) {
+private fun ImageReferenceCard(
+    block: RemoteContent,
+    download: ArtifactDownload?,
+    onDownload: () -> Unit,
+    onPreview: (() -> Unit)? = null,
+    autoPreview: Boolean = false,
+) {
     var enlarged by rememberSaveable(block.file?.referenceId) { mutableStateOf(false) }
     val location = download?.savedLocation
-    val ready = download?.status == "completed" && location != null
+    val ready = download?.status == "completed" && location != null &&
+        (!download.previewOnly || java.io.File(location).isFile)
+    LaunchedEffect(block.file?.referenceId, autoPreview) {
+        if (autoPreview && onPreview != null && (download == null || download.status == "completed" && !ready)) onPreview()
+    }
     NeumorphSurface(
-        onClick = { if (ready) enlarged = true else onDownload() },
+        onClick = { if (ready) enlarged = true else (onPreview ?: onDownload)() },
         enabled = ready || download?.status !in setOf("queued", "downloading"),
         shape = RemoteUi.ControlShape,
         modifier = Modifier.fillMaxWidth().testTag("message-image-preview"),
@@ -4073,6 +4248,11 @@ private fun ImageReferenceCard(block: RemoteContent, download: ArtifactDownload?
                 Text(block.file?.fileName ?: block.messageRenderLabel(), Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (download?.status in setOf("queued", "downloading")) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
             }
+        }
+    }
+    if (onPreview != null && ready) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = onDownload) { Text(L10n.tr("下载原图")) }
         }
     }
     if (enlarged && ready) {
@@ -4157,10 +4337,8 @@ private fun CollapsedThinking(text: String) {
         icon = OrbisSymbols.Psychology,
         title = L10n.tr("思考过程"),
         summary = text,
-        collapsedSummary = "",
         expanded = expanded,
         onClick = { expanded = !expanded },
-        tint = MaterialTheme.colorScheme.secondary,
     )
 }
 
@@ -4202,10 +4380,10 @@ private fun CollapsedTool(
         title = toolName,
         status = status,
         summary = listOfNotNull(arguments, detail).joinToString("\n"),
-        collapsedSummary = detail?.let(::compactActivitySummary).orEmpty(),
         expanded = expanded,
         onClick = { expanded = !expanded },
-        tint = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+        showStatus = status != L10n.tr("已完成"),
+        tint = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
         expandedContent = if (imageFile == null) null else {
             {
                 val previewBlock = RemoteContent(type = "render", renderKind = "image", text = imageFile.fileName, file = imageFile)
@@ -4223,67 +4401,27 @@ private fun CompactDisclosure(
     summary: String,
     expanded: Boolean,
     onClick: () -> Unit,
-    tint: Color,
-    collapsedSummary: String? = null,
-    /** Short state shown beside the title on the same line (iOS: 「read  已完成」). */
+    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     status: String? = null,
+    showStatus: Boolean = true,
     expandedContent: (@Composable () -> Unit)? = null,
 ) {
-    val preview = collapsedSummary ?: summary.lineSequence().firstOrNull().orEmpty()
-    NeumorphSurface(
-        onClick = onClick,
-        style = NeumorphStyle.Pressed,
-        shape = RemoteUi.ControlShape,
-        shadowScale = 0.5f,
-        modifier = Modifier.fillMaxWidth(),
-        contentInset = 12.dp,
-    ) {
-        Row(Modifier.heightIn(min = 40.dp).padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalAlignment = if (expanded || preview.isNotBlank()) Alignment.Top else Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(17.dp))
-            Column(Modifier.weight(1f)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                    status?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1) }
-                }
-                if (preview.isNotBlank()) OrbisCollapse(expanded = !expanded) {
-                    Text(preview, style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                OrbisCollapse(expanded = expanded) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(summary, style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace)
-                        expandedContent?.invoke()
-                    }
-                }
+    Column(Modifier.fillMaxWidth()) {
+        ChatDisclosureRow(title, icon, expanded, onClick, status = status, showStatus = showStatus, tint = tint)
+        OrbisCollapse(expanded) {
+            Column(Modifier.padding(start = 21.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (summary.isNotBlank()) Text(summary, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace)
+                expandedContent?.invoke()
             }
-            Icon(
-                if (expanded) Icons.Rounded.ExpandLess else OrbisSymbols.KeyboardArrowDown,
-                contentDescription = if (expanded) L10n.tr("收起") else L10n.tr("展开"),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
-            )
         }
     }
 }
 
 @Composable
 private fun ToolCard(tool: ToolActivity) {
-    // S6：工具输出 = 真凹陷（inset 面 + 内阴影），不用默认容器色（未归入蓝灰家族会发灰紫）。
-    NeumorphSurface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RemoteUi.ControlShape,
-        style = NeumorphStyle.Pressed,
-        contentPadding = 12.dp,
-    ) {
-        Column(Modifier) {
-            Text(L10n.tr("{0}，{1}", tool.toolName, toolStateText(tool.state)), style = MaterialTheme.typography.titleSmall)
-            tool.detail?.let { Text(it.take(2_000), fontFamily = FontFamily.Monospace) }
-            if (tool.isError) Text(L10n.tr("工具执行失败"), color = MaterialTheme.colorScheme.error)
-        }
+    key(tool.toolCallId) {
+        CollapsedTool(tool.toolName, arguments = null, activity = tool, result = null)
     }
 }
 
@@ -4693,16 +4831,16 @@ private fun toolStateText(state: String): String = when (state) {
  */
 @Composable
 private fun AttachmentChips(uploads: List<UploadTask>, onRemove: (String) -> Unit) {
-    Column(
-        Modifier.fillMaxWidth().padding(horizontal = RemoteUi.PagePadding, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+            .padding(horizontal = RemoteUi.PagePadding, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         for (upload in uploads) {
             val failed = upload.status == "failed"
-            val done = upload.status == "completed"
             Row(
                 Modifier
-                    .fillMaxWidth()
+                    .width(224.dp)
                     .clip(RemoteUi.ControlShape)
                     .background(rememberNeumorphColors().insetBase)
                     .neumorphInsetOverlay(RemoteUi.ControlShape)
@@ -4710,16 +4848,7 @@ private fun AttachmentChips(uploads: List<UploadTask>, onRemove: (String) -> Uni
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Icon(
-                    Icons.Rounded.InsertDriveFile,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                    tint = when {
-                        failed -> MaterialTheme.colorScheme.error
-                        done -> MaterialTheme.colorScheme.tertiary
-                        else -> MaterialTheme.colorScheme.primary
-                    },
-                )
+                AttachmentThumbnail(upload)
                 Column(Modifier.weight(1f)) {
                     FileNameText(upload.displayName, style = MaterialTheme.typography.labelMedium)
                     Text(

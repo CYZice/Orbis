@@ -257,6 +257,23 @@ it("preserves Codex user media, generated images, and public reasoning summaries
   expect(JSON.stringify(syncHistory(replay))).not.toMatch(/result\.png/);
 });
 
+it("keeps remote and data URL user images as renderable image inputs", async () => {
+  const h = makeHarness(); await activate(h);
+  const route = { threadId: "th-1", turnId: "remote-image-turn" };
+  h.notify("item/completed", { ...route, item: { id: "remote-image", type: "userMessage", content: [
+    { type: "text", text: "看图" },
+    { type: "image", url: "https://example.test/image.png", image_url: "https://example.test/image.png" },
+    { type: "image", url: "data:image/png;base64,AAAA", image_url: "data:image/png;base64,AAAA" },
+  ] } });
+  expect(h.events.filter(event => event.type === "message.finished").at(-1)).toMatchObject({
+    message: { content: [
+      { type: "text", text: "看图" },
+      { type: "render", renderKind: "image", imageUrl: "https://example.test/image.png" },
+      { type: "render", renderKind: "image", imageUrl: "data:image/png;base64,AAAA" },
+    ] },
+  });
+});
+
 // Child lifecycles belong to execution.tasks for both native transports; main input stays independent.
 describe("Codex CLI/Desktop child task integration", () => {
   const tasks = (h: ReturnType<typeof makeHarness>) => h.events.filter(event => event.type === "execution.tasks").at(-1)?.tasks;
@@ -1961,6 +1978,19 @@ describe("CodexRuntime", () => {
     expect(statuses.at(-1)).toMatchObject({ status: "idle" });
   });
 
+  it("sends exact catalog $ mentions as native skills without changing the message text", async () => {
+    const path = "D:/skills/review/SKILL.md";
+    const h = makeHarness({ skillsList: [{ cwd: "D:/repo", errors: [], skills: [{ name: "review", path, enabled: true }] }] });
+    await activate(h);
+    await vi.waitFor(() => expect(h.runtime.capabilities().commands.some(command => command.name === "review")).toBe(true));
+    const text = "Use $review twice $review, ignore $review-extra and $missing.";
+    h.runtime.handleCommand({ type: "user_message", text }, "skill-message", "th-1");
+    await vi.waitFor(() => expect(h.requests).toHaveBeenCalledWith("turn/start", expect.objectContaining({ input: [
+      { type: "text", text }, { type: "skill", name: "review", path },
+    ] })));
+    h.resolveNext({});
+  });
+
   it("user_message image attachments use native Codex image input", async () => {
     const h = makeHarness();
     await activate(h);
@@ -2728,6 +2758,60 @@ describe("CodexRuntime", () => {
       value: "a2",
       tree: { parentId: "u2", role: "assistant", defaultHidden: false, isCurrent: true },
     });
+  });
+
+  it("edits a user turn and resends its original native attachments only after the rewind", async () => {
+    const h = makeHarness();
+    const photo = "D:/repo/.orbis-uploads/photo.png";
+    const file = "D:/repo/.orbis-uploads/report.txt";
+    const [first, second] = TREE_TURNS;
+    if (second === undefined) throw new Error("Expected a second fixture turn");
+    await activateWithTurns(h, [first, { ...second, items: [
+      { type: "userMessage", id: "u2", content: [
+        { type: "text", text: `Original\n\n附件路径：\n${file}` }, { type: "localImage", path: photo },
+        { type: "image", url: "https://example.test/original.png", image_url: "https://example.test/original.png" },
+      ] }, second.items[1],
+    ] }]);
+    expect(h.runtime.handleCommand({ type: "slash.execute", name: "edit-message", args: JSON.stringify({ entryId: "u2", text: "Edited" }) },
+      "edit", "th-1")).toBe(true);
+    await vi.waitFor(() => expect(h.requests).toHaveBeenCalledWith("thread/revert", { threadId: "th-1", beforeTurnId: "turn-2" }));
+    expect(h.requests).not.toHaveBeenCalledWith("turn/start", expect.anything());
+    h.resolveNext({ thread: { id: "th-1", cwd: "D:/repo" } });
+    await vi.waitFor(() => expect(h.historyReads).toHaveBeenCalled());
+    h.resolveNext({ data: [first] });
+    await vi.waitFor(() => expect(h.requests).toHaveBeenCalledWith("turn/start", {
+      threadId: "th-1", clientUserMessageId: "edit", input: [
+        { type: "text", text: `Edited\n\n附件路径：\n${file}` }, { type: "localImage", path: photo },
+          { type: "image", url: "https://example.test/original.png", image_url: "https://example.test/original.png" },
+      ],
+    }));
+    h.resolveNext({ turn: { id: "turn-edited" } });
+    await vi.waitFor(() => expect(h.events).toContainEqual(expect.objectContaining({ type: "command.result", commandId: "edit", ok: true })));
+  });
+
+  it("does not expose a same-turn follow-up as an editable rewind boundary", async () => {
+    const h = makeHarness();
+    await activateWithTurns(h, [{ id: "turn-1", items: [
+      { type: "userMessage", id: "u1", content: [{ type: "text", text: "首条" }] },
+      { type: "userMessage", id: "u2", content: [{ type: "text", text: "同轮补充" }] },
+      { type: "agentMessage", id: "a1", text: "回答" },
+    ] }]);
+    expect(h.runtime.handleCommand({ type: "slash.execute", name: "edit-message", args: JSON.stringify({ entryId: "u2", text: "修改" }) },
+      "edit-follow-up", "th-1")).toBe(true);
+    await vi.waitFor(() => expect(h.events).toContainEqual(expect.objectContaining({
+      type: "command.result", commandId: "edit-follow-up", ok: false,
+    })));
+    expect(h.requests).not.toHaveBeenCalledWith("thread/revert", expect.anything());
+  });
+
+  it("forks through the selected native turn and returns the verified child session", async () => {
+    const h = makeHarness();
+    await activateWithTurns(h, TREE_TURNS);
+    expect(h.runtime.handleCommand({ type: "slash.execute", name: "fork", args: "turn-1" }, "historical-fork", "th-1")).toBe(true);
+    await vi.waitFor(() => expect(h.requests).toHaveBeenCalledWith("thread/fork", { threadId: "th-1", lastTurnId: "turn-1" }));
+    h.resolveNext({ thread: { id: "child", cwd: "D:/repo", turns: [TREE_TURNS[0]] } });
+    await vi.waitFor(() => expect(h.events).toContainEqual(expect.objectContaining({ type: "command.result", commandId: "historical-fork",
+      ok: true, result: { sessionId: "child" } })));
   });
 
   it("slash.execute /tree <用户消息>：原地 revert 到该轮之前，并回传原文（编辑这条消息并重新开始）", async () => {

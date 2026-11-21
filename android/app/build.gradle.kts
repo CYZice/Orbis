@@ -117,7 +117,8 @@ val buildRelayQuic by tasks.registering(Exec::class) {
     inputs.dir(root.resolve("native/relayquic"))
     inputs.file(root.resolve("scripts/build-relay-quic.py"))
     outputs.file(relayQuicAar)
-    commandLine("python3", root.resolve("scripts/build-relay-quic.py"), relayQuicAar.get().asFile, android.sdkDirectory)
+    val python = if (System.getProperty("os.name").contains("Windows", ignoreCase = true)) "python" else "python3"
+    commandLine(python, root.resolve("scripts/build-relay-quic.py"), relayQuicAar.get().asFile, android.sdkDirectory)
 }
 
 dependencies {

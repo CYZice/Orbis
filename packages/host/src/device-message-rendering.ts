@@ -59,11 +59,11 @@ export class DeviceMessageRendering {
         return file === undefined ? { ...block, sourcePath: undefined }
           : { ...block, sourcePath: undefined, file: { fileName: name, referenceId: file.referenceId } };
       }
-      if (block.type !== "render" || block.renderKind !== "image" || block.sourcePath === undefined) return block;
+      if (block.type !== "render" || !["image", "attachment"].includes(block.renderKind) || block.sourcePath === undefined) return block;
       const name = block.text.split(/[\\/]/u).at(-1) || "image";
       const file = resolve(block.sourcePath);
-      return file === undefined ? { type: "render", renderKind: "image", text: "图片不可用" }
-        : { type: "render", renderKind: "file_reference", purpose: "output", text: name,
+      return file === undefined ? { type: "render", renderKind: block.renderKind, text: block.renderKind === "image" ? "图片不可用" : name }
+        : { type: "render", renderKind: "file_reference", ...(value.role === "user" ? {} : { purpose: "output" as const }), text: name,
           file: { fileName: name, referenceId: file.referenceId } };
     }) });
     const project = (value: ChatMessage, streaming = false): ChatMessage => {

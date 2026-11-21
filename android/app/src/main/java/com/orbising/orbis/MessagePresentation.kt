@@ -37,15 +37,6 @@ internal fun contentPresentation(role: String, contentType: String): ContentPres
     else -> ContentPresentation.MESSAGE
 }
 
-internal fun compactActivitySummary(value: String, maxCharacters: Int = 120): String {
-    val compact = value.replace(Regex("\\s+"), " ").trim()
-    if (compact.length <= maxCharacters) return compact
-    if (maxCharacters <= 1) return "…"
-    val candidate = compact.take(maxCharacters - 1)
-    val boundary = candidate.lastIndexOf(' ').takeIf { it > 0 } ?: candidate.length
-    return candidate.take(boundary).trimEnd() + "…"
-}
-
 /**
  * S31: cards follow visible reasoning/text/tool steps on every backend. Native turns
  * remain timing/execution facts and never decide the visual grouping.

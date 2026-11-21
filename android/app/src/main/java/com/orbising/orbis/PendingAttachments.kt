@@ -64,7 +64,7 @@ internal fun PendingAttachments(uploads: List<UploadTask>) {
 
 /** 36dp 方形缩略图：手机上的图片按需降采样解码，其他文件或解码失败显示文件图标。 */
 @Composable
-private fun AttachmentThumbnail(upload: UploadTask) {
+internal fun AttachmentThumbnail(upload: UploadTask) {
     val context = LocalContext.current
     val image by produceState<ImageBitmap?>(null, upload.sourceUri) {
         value = withContext(Dispatchers.IO) { decodeAttachmentThumbnail(context, upload) }
