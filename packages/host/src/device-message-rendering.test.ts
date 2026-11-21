@@ -31,6 +31,16 @@ it("projects Codex local images to a Host-issued file reference", () => {
   } }] } });
 });
 
+it("keeps a user's text and turns ordinary attachments into file cards without paths", () => {
+  const content = [{ type: "text" as const, text: "Read this report" },
+    { type: "render" as const, renderKind: "attachment", text: "report.json", sourcePath: "package.json" }];
+  const projected = renderer()({ type: "message.finished", message: { messageId: "user-report", role: "user", timestamp: 1, content } }, true);
+  expect(projected).toMatchObject({ message: { content: [content[0], {
+    type: "render", renderKind: "file_reference", file: { fileName: "report.json", referenceId: expect.stringMatching(/^orbis-message-file:/) },
+  }] } });
+  expect(JSON.stringify(projected)).not.toContain("sourcePath");
+});
+
 it("projects an imageView tool path into its expandable tool preview reference", () => {
   const files = new MessageFileReferences();
   const event = { type: "message.finished" as const, message: {

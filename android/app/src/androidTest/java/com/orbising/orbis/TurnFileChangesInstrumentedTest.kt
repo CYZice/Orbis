@@ -41,6 +41,7 @@ class TurnFileChangesInstrumentedTest {
         assertEquals("Codex 文件工具", changeScopeLabel(native.scope))
         assertEquals(0, details)
         screenshot("native-summary-tool-scope")
+        compose.onNodeWithTag("turn-changes-open-turn").performClick()
         compose.onNodeWithTag("change-file-file-1").performClick()
         assertEquals(1, details)
     }
@@ -54,6 +55,8 @@ class TurnFileChangesInstrumentedTest {
         assertEquals(0, manifests); assertEquals(0, details)
         // Compact block: header, then one single-line row per preview file in order.
         val header = compose.onNodeWithTag("turn-changes-open-turn").assertTextContains("5 个文件已更改", substring = true).fetchSemanticsNode().boundsInRoot
+        compose.onNodeWithTag("change-file-file-1").assertDoesNotExist()
+        compose.onNodeWithTag("turn-changes-open-turn").performClick()
         val rows = (1..4).map { compose.onNodeWithTag("change-file-file-$it").fetchSemanticsNode().boundsInRoot }
         val density = InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density
         assertTrue(rows.first().top >= header.bottom)
@@ -89,6 +92,7 @@ class TurnFileChangesInstrumentedTest {
             }
         } }
         compose.mainClock.autoAdvance = false
+        compose.onNodeWithTag("turn-changes-open-turn").performClick()
         compose.onNodeWithTag("change-file-file-3").performClick()
         compose.mainClock.advanceTimeByFrame()
         compose.waitForIdle()
@@ -116,6 +120,7 @@ class TurnFileChangesInstrumentedTest {
         compose.onNodeWithText("正在读取差异…").assertIsDisplayed()
         compose.onNodeWithContentDescription("关闭文件差异").performClick()
         compose.onNodeWithTag("file-change-viewer").assertDoesNotExist()
+        compose.onNodeWithTag("turn-changes-open-turn").performClick()
         compose.onNodeWithTag("change-file-file-2").performClick()
         compose.onNodeWithTag("file-change-page").assertTextEquals("2 / 5")
         compose.onNodeWithText("正在读取差异…").assertIsDisplayed()

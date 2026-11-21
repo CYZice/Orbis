@@ -40,7 +40,7 @@ class ToolPanelInstrumentedTest {
         compose.setContent {
             OrbisTheme {
                 Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(20.dp)) {
-                    ToolSummaryDisclosure(summary, connected) { reads += it }
+                    ToolSummaryDisclosure(summary, connected, onReadPart = { reads += it })
                 }
             }
         }
@@ -71,7 +71,7 @@ class ToolPanelInstrumentedTest {
                     ToolSummaryDisclosure(summary.copy(contents = listOf(
                         ToolPart("arguments", "json", "absent", "none"),
                         ToolPart("output", "text", "temporarily-unavailable", "range"),
-                    )), true) { error("Unavailable parts must not request content") }
+                    )), true, onReadPart = { error("Unavailable parts must not request content") })
                 }
             }
         }

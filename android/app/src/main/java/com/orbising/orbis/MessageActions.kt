@@ -7,6 +7,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material3.HorizontalDivider
@@ -31,21 +32,23 @@ internal fun MessageActions(
     text: String,
     rewindEnabled: Boolean,
     onRewind: (() -> Unit)?,
+    onEdit: (() -> Unit)? = null,
     content: @Composable (open: () -> Unit) -> Unit,
 ) {
     var mode by remember(id) { mutableStateOf(MessageActionMode.Reading) }
     var menuEpoch by remember(id) { mutableIntStateOf(0) }
     val currentRewind by rememberUpdatedState(onRewind)
     val currentEnabled by rememberUpdatedState(rewindEnabled)
+    val currentEdit by rememberUpdatedState(onEdit)
     val active = LocalPageActive.current
     fun dismiss() { mode = MessageActionMode.Reading }
     fun show() {
-        if (active && mode == MessageActionMode.Reading && (text.isNotEmpty() || rewindEnabled && onRewind != null)) {
+        if (active && mode == MessageActionMode.Reading && (text.isNotEmpty() || onEdit != null || rewindEnabled && onRewind != null)) {
             menuEpoch++
             mode = MessageActionMode.Menu
         }
     }
-    LaunchedEffect(id, text, rewindEnabled, onRewind != null, active) { dismiss() }
+    LaunchedEffect(id, text, rewindEnabled, onRewind != null, onEdit != null, active) { dismiss() }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     DisposableEffect(lifecycle, id) {
         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) dismiss() }
@@ -66,7 +69,13 @@ internal fun MessageActions(
                         leadingIcon = { OrbisActionIcon(Icons.Rounded.TextFields, contentDescription = null) },
                         onClick = { if (mode == MessageActionMode.Menu) mode = MessageActionMode.TextSelection })
                 }
-                if (rewindEnabled && onRewind != null) {
+                if (onEdit != null) {
+                    if (text.isNotEmpty()) HorizontalDivider()
+                    NeumorphMenuItem(text = { Text(L10n.tr("编辑并重发")) },
+                        leadingIcon = { OrbisActionIcon(Icons.Rounded.Edit, contentDescription = null) },
+                        onClick = { if (mode == MessageActionMode.Menu) { dismiss(); currentEdit?.invoke() } })
+                }
+                if (rewindEnabled && onRewind != null && onEdit == null) {
                     if (text.isNotEmpty()) HorizontalDivider()
                     NeumorphMenuItem(text = { Text("Rewind") },
                         leadingIcon = { OrbisActionIcon(Icons.Rounded.SkipPrevious, contentDescription = null) },

@@ -1754,7 +1754,7 @@ internal class HostConnection(
         if (sessionId != null && (pending.isNotEmpty() || configs.isNotEmpty() || state.ledger.blocks(OperationKinds.sendGroup(sessionId)))) {
             return sendWhenReady(runtimeId, sessionId, trimmed, delivery, uploadTaskIds, pending, configs)
         }
-        return sendUserMessage(runtimeId, trimmed, delivery, attachments + uploads.mapNotNull(UploadTask::remotePath).filter { it !in attachments })
+        return sendUserMessage(runtimeId, trimmed, delivery, attachments + uploads.mapNotNull(UploadTask::remotePath).filter { it !in attachments }, uploadTaskIds)
     }
 
     private fun sendWhenReady(runtimeId: String, sessionId: String, text: String, delivery: String?,
@@ -1810,7 +1810,7 @@ internal class HostConnection(
      * ADR-0049：写入加密通道后立即显示本地行；源端带回同一身份时由权威行替换。
      * 后端分配的 id 各不相同，对账只认 `messageId` / `clientMessageId`，不按正文猜。
      */
-    private fun sendUserMessage(runtimeId: String, text: String, delivery: String?, attachments: List<String>): String? {
+    private fun sendUserMessage(runtimeId: String, text: String, delivery: String?, attachments: List<String>, uploadIds: List<String>): String? {
         val sessionId = mutableState.value.runtimes[runtimeId]?.sessionId
         if (sessionId == null) {
             updateState { it.composerFailure(it.selectedRuntimeId, L10n.tr("会话尚未就绪，请稍后重试")) }
@@ -1823,7 +1823,7 @@ internal class HostConnection(
         updateState { state ->
             val anchor = state.conversations[runtimeId]?.messages?.lastOrNull()?.messageId
             state.copy(pendingSends = state.pendingSends + (messageId to PendingSend(messageId, commandId, sessionId, text,
-                attachments, delivery, System.currentTimeMillis(), anchor)))
+                attachments, delivery, System.currentTimeMillis(), anchor, uploadIds = uploadIds)))
         }
         return commandId
     }
@@ -1849,7 +1849,7 @@ internal class HostConnection(
             send.delivery == "steer" && runtime.agentKind != "claude" -> "steer"
             else -> "followUp"
         }
-        val commandId = sendUserMessage(runtimeId, send.text, delivery, send.attachments) ?: return null
+        val commandId = sendUserMessage(runtimeId, send.text, delivery, send.attachments, send.uploadIds) ?: return null
         updateState { it.copy(pendingSends = it.pendingSends - messageId) }
         return commandId
     }
@@ -1867,7 +1867,9 @@ internal class HostConnection(
         clearConfiguredFirstMessage(messageId)
         draftStore.removeWaiting(messageId)
         // 附件没传成：正文回到输入框，附件由调用方重新挂回输入框（uploadsOf）。
-        if (send.uploadIds.isNotEmpty() && send.attachments.isEmpty()) return send.text
+        // Upload-backed attachments are restored structurally by the composer;
+        // never leak their temporary Host paths into the user's message text.
+        if (send.uploadIds.isNotEmpty()) return send.text
         return if (send.attachments.isEmpty()) send.text else send.text + "\n\n附件路径：\n" + send.attachments.joinToString("\n")
     }
 
@@ -1879,12 +1881,12 @@ internal class HostConnection(
         val requeued = mutableListOf<String>()
         sources.forEach { task ->
             if (task.status == "completed") requeued += task.taskId
-            else queueUpload(Uri.parse(task.sourceUri), runtimeId) { id ->
+            else queueUpload(Uri.parse(task.sourceUri), runtimeId, { id ->
                 synchronized(requeued) {
                     requeued += id
                     if (requeued.size == sources.size) sendMessage(send.text, send.delivery, uploadTaskIds = requeued.toList())
                 }
-            }
+            })
         }
         if (requeued.size == sources.size) return sendMessage(send.text, send.delivery, uploadTaskIds = requeued.toList())
         return send.commandId
@@ -1913,11 +1915,6 @@ internal class HostConnection(
     /**
      * 已经把文件交给 Pi 之后清掉 composer 上的附件：任务本身还留在上传列表里（可查进度/删记录）。
      */
-    fun detachUploads(taskIds: Set<String>) {
-        if (taskIds.isEmpty()) return
-        updateState { it.copy(uploads = it.uploads - taskIds) }
-    }
-
     /**
      * 会话输入栏的附件关联，按会话记在 ViewModel 上而不是 Compose 的 remember 里：
      * 退出会话窗口再回来，chip 要原样恢复——上传任务本身不因退出窗口取消，入口也不该消失。
@@ -2399,14 +2396,14 @@ internal class HostConnection(
      * 命令一律发给 Host——能读这个文件的就是它；任务不记录是从哪个会话点开的。
      * 未配对 Host 时直接报错，而不是把请求丢给某个 runtime。
      */
-    fun downloadFile(path: String): Boolean {
+    fun downloadFile(path: String, previewOnly: Boolean = false): Boolean {
         if (path.isBlank() || isKimiCode(null, mutableState.value.selectedRuntimeId)) return false
         val hostId = mutableState.value.hostId
         if (hostId == null) {
             updateState { it.connectionFailure(FeedbackLevel.F4, L10n.tr("请先配对电脑"), FeedbackCondition.PAIRING) }
             return false
         }
-        return startFileDownload(hostId, path.trim())
+        return startFileDownload(hostId, path.trim(), previewOnly = previewOnly)
     }
 
     fun cancelDownload(taskId: String) {
@@ -2472,14 +2469,16 @@ internal class HostConnection(
         hostId: String,
         path: String,
         displayName: String = downloadDisplayName(path),
+        previewOnly: Boolean = false,
     ): Boolean {
-        val taskId = fileDownloadTaskId(hostId, path)
+        val taskId = fileDownloadTaskId(hostId, path, previewOnly)
         val task = mutableState.value.downloads[taskId] ?: ArtifactDownload(
             taskId = taskId,
             runtimeId = hostId,
             hostId = hostId,
             displayName = displayName,
             sourcePath = path,
+            previewOnly = previewOnly,
         )
         return startDownload(task, hostId) { offset -> relay.downloadFile(hostId, path, offset) }
     }
@@ -3984,7 +3983,7 @@ internal class HostConnection(
      * [onQueued] 在任务登记完成后（主线程）回调 taskId：composer 要立刻把这个任务挂到
      * 附件 chip 上，否则用户看不到「正在上传」这件事。
      */
-    fun queueUpload(uri: Uri, runtimeId: String, onQueued: (String) -> Unit = {}) {
+    fun queueUpload(uri: Uri, runtimeId: String, onQueued: (String) -> Unit = {}, onFinished: () -> Unit = {}) {
         if (isKimiCode(mutableState.value.runtimes[runtimeId]?.agentKind, runtimeId)) return
         val runtime = mutableState.value.runtimes[runtimeId]
         if (runtime == null) {
@@ -3996,14 +3995,17 @@ internal class HostConnection(
                 runCatching { ArtifactUploadStore.inspect(application.contentResolver, uri) }
             }.getOrElse { error ->
                 updateState { it.composerFailure(runtimeId, L10n.tr("无法读取所选文件：{0}", error.message ?: L10n.tr("未知错误"))) }
+                onFinished()
                 return@launch
             }
             if (inspected.size > MAX_UPLOAD_BYTES) {
                 updateState { it.composerFailure(runtimeId, L10n.tr("文件超过 {0} MB 上限", MAX_UPLOAD_BYTES / (1024 * 1024))) }
+                onFinished()
                 return@launch
             }
             if (inspected.size == 0L) {
                 updateState { it.composerFailure(runtimeId, L10n.tr("所选文件是空的")) }
+                onFinished()
                 return@launch
             }
             val task = UploadTask(
@@ -4023,6 +4025,7 @@ internal class HostConnection(
             artifactUploadStore.register(task)
             updateState { it.copy(uploads = it.uploads + (task.taskId to task)).composerFailure(runtimeId, "") }
             onQueued(task.taskId)
+            onFinished()
             relay.initUpload(
                 requestId = task.taskId,
                 runtimeId = runtimeId,

@@ -36,21 +36,6 @@ class MessagePresentationTest {
     }
 
     @Test
-    fun `collapsed activity summary is one compact readable line`() {
-        val summary = compactActivitySummary(
-            """
-                first line
-                second    line
-                third line with additional detail
-            """.trimIndent(),
-            maxCharacters = 28,
-        )
-
-        assertEquals("first line second line…", summary)
-        assertFalse(summary.contains('\n'))
-    }
-
-    @Test
     fun `tool results are merged into their matching tool call instead of rendered twice`() {
         val assistant = ChatMessage(
             messageId = "assistant-1",

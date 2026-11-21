@@ -34,6 +34,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -165,7 +166,7 @@ internal fun TurnChangeSummaryView(
     onReadManifest: () -> Unit, onOpenFile: (FileChangeMetadata) -> Unit,
 ) {
     var expanded by rememberSaveable(summary.changeSetId) { mutableStateOf(false) }
-    var openActivation by remember { mutableStateOf(0) }
+    var showFiles by rememberSaveable(summary.changeSetId) { mutableStateOf(false) }
     var expandActivation by remember { mutableStateOf(0) }
     val ready = summary.state == "ready"
     val count = summary.fileCount?.toInt() ?: manifest.files.size
@@ -184,44 +185,47 @@ internal fun TurnChangeSummaryView(
         NeumorphSurface(Modifier.fillMaxWidth(), style = NeumorphStyle.Pressed, shape = RemoteUi.ControlShape, shadowScale = 0.5f) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 2.dp)) {
                 Row(Modifier.fillMaxWidth().heightIn(min = 44.dp)
-                    .then(if (opens) Modifier.orbisKeyboardFocus().clickable(enabled = canRead) { openActivation++; onOpenFile(files.first()) }
-                        .semantics { contentDescription = L10n.tr("查看详情，{0}", title) } else Modifier)
+                    .then(if (opens) Modifier.orbisKeyboardFocus().clickable(enabled = canRead) { showFiles = !showFiles }
+                        .semantics { stateDescription = if (showFiles) L10n.tr("已展开") else L10n.tr("已折叠") } else Modifier)
                     .testTag("turn-changes-open-${summary.reviewTurnId}"),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Icon(if (summary.state == "unavailable") OrbisSymbols.Error else OrbisSymbols.Description,
-                        contentDescription = null, tint = muted, modifier = Modifier.size(17.dp).actionGlyphMotion(openActivation))
+                        contentDescription = null, tint = muted, modifier = Modifier.size(15.dp))
                     Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium,
+                        Text(title, style = MaterialTheme.typography.bodySmall,
                             color = if (opens) MaterialTheme.colorScheme.onSurface else muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         if (pending) CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp, color = muted)
                     }
                     if (opens) {
                         ChangeCounts(summary.additions, summary.deletions, status = null)
-                        Icon(OrbisSymbols.ChevronRight, contentDescription = null, tint = muted, modifier = Modifier.size(18.dp).actionGlyphMotion(openActivation))
+                        Icon(if (showFiles) Icons.Rounded.ExpandLess else OrbisSymbols.KeyboardArrowDown,
+                            contentDescription = null, tint = muted, modifier = Modifier.size(16.dp))
                     }
                 }
-                files.forEach { file -> ChangeHairline(); ChangeFileRow(file, canRead) { onOpenFile(file) } }
-                if (ready && count > 4) {
-                    ChangeHairline()
-                    Row(Modifier.fillMaxWidth().heightIn(min = 40.dp).orbisKeyboardFocus().clickable(enabled = canRead) {
-                        expandActivation++
-                        expanded = !expanded
-                        if (expanded && !manifest.loaded) onReadManifest()
-                    }, verticalAlignment = Alignment.CenterVertically) {
-                        Text(if (expanded) L10n.tr("收起") else L10n.tr("还有 {0} 个文件", count - 4), Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodySmall, color = muted)
-                        if (manifest.requestId != null) CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp, color = muted)
-                        Icon(if (expanded) Icons.Rounded.ExpandLess else OrbisSymbols.KeyboardArrowDown, contentDescription = null,
-                            tint = muted, modifier = Modifier.size(18.dp).actionGlyphMotion(expandActivation))
+                if (showFiles) {
+                    files.forEach { file -> ChangeHairline(); ChangeFileRow(file, canRead) { onOpenFile(file) } }
+                    if (ready && count > 4) {
+                        ChangeHairline()
+                        Row(Modifier.fillMaxWidth().heightIn(min = 40.dp).orbisKeyboardFocus().clickable(enabled = canRead) {
+                            expandActivation++
+                            expanded = !expanded
+                            if (expanded && !manifest.loaded) onReadManifest()
+                        }, verticalAlignment = Alignment.CenterVertically) {
+                            Text(if (expanded) L10n.tr("收起") else L10n.tr("还有 {0} 个文件", count - 4), Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodySmall, color = muted)
+                            if (manifest.requestId != null) CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp, color = muted)
+                            Icon(if (expanded) Icons.Rounded.ExpandLess else OrbisSymbols.KeyboardArrowDown, contentDescription = null,
+                                tint = muted, modifier = Modifier.size(18.dp).actionGlyphMotion(expandActivation))
+                        }
                     }
-                }
-                if (expanded && manifest.requestId == null && (manifest.loaded && !manifest.complete || manifest.error != null)) {
-                    ChangeHairline()
-                    Text(if (manifest.error != null) L10n.tr("重新读取文件清单") else L10n.tr("加载更多文件"),
-                        Modifier.fillMaxWidth().orbisKeyboardFocus().clickable(enabled = canRead, onClick = onReadManifest).heightIn(min = 40.dp)
-                            .wrapContentHeight(Alignment.CenterVertically),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (manifest.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+                    if (expanded && manifest.requestId == null && (manifest.loaded && !manifest.complete || manifest.error != null)) {
+                        ChangeHairline()
+                        Text(if (manifest.error != null) L10n.tr("重新读取文件清单") else L10n.tr("加载更多文件"),
+                            Modifier.fillMaxWidth().orbisKeyboardFocus().clickable(enabled = canRead, onClick = onReadManifest).heightIn(min = 40.dp)
+                                .wrapContentHeight(Alignment.CenterVertically),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (manifest.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+                    }
                 }
             }
         }

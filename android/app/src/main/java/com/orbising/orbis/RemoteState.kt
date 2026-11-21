@@ -258,6 +258,7 @@ data class RemoteContent(
     val renderKind: String? = null,
     val file: MessageFileReference? = null,
     val sourcePath: String? = null,
+    val imageUrl: String? = null,
 )
 
 @Serializable
@@ -397,8 +398,8 @@ data class CommandResult(
 internal fun artifactTransferKey(runtimeId: String, transferId: String): String = "$runtimeId\u0000$transferId"
 
 // 下载任务只认 Host + 文件身份，与会话无关：同一个文件从哪个会话点开都是同一条任务。
-internal fun fileDownloadTaskId(hostId: String, path: String): String = UUID.nameUUIDFromBytes(
-    "$hostId\u0000file\u0000$path".toByteArray(Charsets.UTF_8),
+internal fun fileDownloadTaskId(hostId: String, path: String, previewOnly: Boolean = false): String = UUID.nameUUIDFromBytes(
+    "$hostId\u0000file\u0000${if (previewOnly) "preview" else "original"}\u0000$path".toByteArray(Charsets.UTF_8),
 ).toString()
 
 internal fun artifactDownloadTaskId(hostId: String, artifactId: String): String = UUID.nameUUIDFromBytes(
@@ -429,8 +430,8 @@ data class ArtifactDownload(
     val error: String? = null,
     /** 服务这条下载的 Host runtimeId（`artifact.started` 带的那个）。完成时要拿它对账 store。 */
     val transferRuntimeId: String? = null,
-    /** `"pull"` = 接收方驱动的范围下载（ADR-0005）；`null`/其他 = 旧流式 + ACK。 */
     val createdAt: Long = System.currentTimeMillis(),
+    val previewOnly: Boolean = false,
 )
 
 data class PendingDownload(

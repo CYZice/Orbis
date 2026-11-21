@@ -100,6 +100,7 @@ class ArtifactDownloadStore(context: Context) {
             ?: findDownloadTaskId(tasks.values, runtimeId, artifact)
             ?: artifactDownloadTaskId(runtimeId, artifact.artifactId)
         val existing = tasks[taskId]
+        require(existing?.previewOnly != true || artifact.size <= 20L * 1024 * 1024) { L10n.tr("图片太大，无法预览") }
         if (existing != null && existing.status in setOf("completed", "failed") && boundTaskId == null) {
             return taskId
         }
@@ -371,6 +372,18 @@ class ArtifactDownloadStore(context: Context) {
 
     private fun publish(download: ActiveDownload): String {
         verifyChecksum(download)
+        if (tasks[download.taskId]?.previewOnly == true) {
+            val directory = File(appContext.cacheDir, "message-images").apply { mkdirs() }
+            val target = File(directory, download.temporaryFile.name + ".image")
+            var used = download.artifact.size
+            directory.listFiles().orEmpty().filter { it != target }.sortedByDescending(File::lastModified).forEach { old ->
+                used += old.length()
+                if (used > 96L * 1024 * 1024) old.delete()
+            }
+            download.temporaryFile.copyTo(target, overwrite = true)
+            download.temporaryFile.delete()
+            return target.absolutePath
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, download.artifact.fileName)

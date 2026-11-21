@@ -43,5 +43,14 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/update_paths" />
         </provider>
+        <provider
+            android:name=".ComposerCameraProvider"
+            android:authorities="${applicationId}.composer-camera"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/composer_camera_paths" />
+        </provider>
     </application>
 </manifest>
