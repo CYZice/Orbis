@@ -90,7 +90,7 @@ internal fun GrowingReplyCard(
     val alpha by animateFloatAsState(if (appeared || reduced) 1f else 0f,
         tween(if (reduced) 0 else InteractionMotion.ReplyArrival, easing = InteractionMotion.ReplyEase), label = "reply-arrival")
     LaunchedEffect(id) { appeared = true }
-    NeumorphSurface(modifier.fillMaxWidth().graphicsLayer { this.alpha = alpha }, shadowScale = 0.55f, contentPadding = 16.dp) {
+    NeumorphSurface(modifier.fillMaxWidth().graphicsLayer { this.alpha = alpha }, shadowScale = 0.55f, contentPadding = 10.dp) {
         Layout(content = content, modifier = Modifier.clipToBounds()) { children, constraints ->
             val child = children.single().measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
             val natural = IntSize(child.width, child.height)

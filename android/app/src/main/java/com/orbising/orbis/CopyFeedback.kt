@@ -2,6 +2,7 @@ package com.orbising.orbis
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
@@ -10,10 +11,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -109,6 +112,28 @@ internal fun CopyIconButton(
         enabled = enabled,
         copyFeedback = feedback.copied,
     )
+}
+
+/** Chat footer actions are flat and do not add a full button-height row. */
+@Composable
+internal fun ReplyActionButton(label: String, onClick: () -> Unit, content: @Composable () -> Unit) {
+    Box(Modifier.size(width = 40.dp, height = 28.dp)
+        .clickable(role = Role.Button, onClick = onClick)
+        .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
+        androidx.compose.runtime.CompositionLocalProvider(LocalContentColor provides androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant) {
+            content()
+        }
+    }
+}
+
+@Composable
+internal fun ReplyCopyButton(label: String, identity: Any, text: () -> String) {
+    val clipboard = LocalClipboardManager.current
+    val feedback = rememberCopyFeedback(identity, enabled = true)
+    ReplyActionButton(if (feedback.copied) L10n.tr("已复制") else label,
+        onClick = { feedback.perform { clipboard.setText(AnnotatedString(text())) } }) {
+        CopyFeedbackIcon(feedback.copied, size = 16.dp)
+    }
 }
 
 /** The label and hit area stay fixed while the copy glyph changes to a check. */

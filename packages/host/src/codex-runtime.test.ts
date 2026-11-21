@@ -2807,11 +2807,19 @@ describe("CodexRuntime", () => {
   it("forks through the selected native turn and returns the verified child session", async () => {
     const h = makeHarness();
     await activateWithTurns(h, TREE_TURNS);
-    expect(h.runtime.handleCommand({ type: "slash.execute", name: "fork", args: "turn-1" }, "historical-fork", "th-1")).toBe(true);
+    expect(h.runtime.handleCommand({ type: "slash.execute", name: "fork", args: "entry:a1" }, "historical-fork", "th-1")).toBe(true);
     await vi.waitFor(() => expect(h.requests).toHaveBeenCalledWith("thread/fork", { threadId: "th-1", lastTurnId: "turn-1" }));
     h.resolveNext({ thread: { id: "child", cwd: "D:/repo", turns: [TREE_TURNS[0]] } });
     await vi.waitFor(() => expect(h.events).toContainEqual(expect.objectContaining({ type: "command.result", commandId: "historical-fork",
       ok: true, result: { sessionId: "child" } })));
+  });
+
+  it("never falls back to forking the whole thread when the reply anchor is missing", async () => {
+    const h = makeHarness();
+    await activateWithTurns(h, TREE_TURNS);
+    expect(h.runtime.handleCommand({ type: "slash.execute", name: "fork", args: "entry:missing" }, "bad-fork", "th-1")).toBe(true);
+    await vi.waitFor(() => expect(h.events).toContainEqual(expect.objectContaining({ type: "command.result", commandId: "bad-fork", ok: false })));
+    expect(h.requests).not.toHaveBeenCalledWith("thread/fork", expect.anything());
   });
 
   it("slash.execute /tree <用户消息>：原地 revert 到该轮之前，并回传原文（编辑这条消息并重新开始）", async () => {

@@ -1604,14 +1604,7 @@ internal fun ChatScreen(
     val rewindCommands = state.capabilities[runtimeId]?.commands.orEmpty()
     val rewindGraph = sessionId?.let(state.sessionGraphs::get)
     val rewindOptions = remember(rewindCommands, rewindGraph?.display) { userMessageRewindOptions(rewindCommands, rewindGraph) }
-    val editableEntries = remember(rewindGraph) {
-        rewindGraph?.let { graph ->
-            buildSessionPath(graph.entries, graph.cursor.leafId).mapNotNull { entry ->
-                val message = graph.display[entry.entryId]?.message
-                message?.takeIf { it.role == "user" }?.let { it.messageId to entry.entryId }
-            }.toMap()
-        }.orEmpty()
-    }
+    val actionEntries = remember(rewindGraph) { rewindGraph?.messageActionEntries().orEmpty() }
     val activeTurn = conversation.activeTurnId?.let(conversation.turnTimings::get)
     var timerNow by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(activeTurn?.turnId, activeTurn?.startedAt) {
@@ -1632,15 +1625,6 @@ internal fun ChatScreen(
         state.e2eReady && conversation.sourceReady && !conversation.isChatSyncing))
     val messageTurnTimings = projection?.timings.orEmpty()
     val turnIdsByMessageId = projection?.turnIds.orEmpty()
-    val firstUserMessageIds = remember(chatItems, turnIdsByMessageId) {
-        val seenTurns = mutableSetOf<String>()
-        chatItems.mapNotNull { item ->
-            (item as? ChatListItem.UserMessage)?.message?.let { message ->
-                val turn = turnIdsByMessageId[message.messageId] ?: return@let null
-                if (!seenTurns.add(turn)) null else message.messageId
-            }
-        }.toSet()
-    }
     val turnChangeProjection = rememberTurnChangePresentation(TurnChangePresentationRequest(
         TurnChangePresentationIdentity(runtimeId, pageSessionId, state.sessionBranchGenerations[runtimeId] ?: 0),
         projection?.items.orEmpty(), turnIdsByMessageId,
@@ -1819,6 +1803,10 @@ internal fun ChatScreen(
     var pendingMessageText by remember(runtimeId) { mutableStateOf("") }
     var commandFeedback by remember(runtimeId) { mutableStateOf<String?>(null) }
     var commandFeedbackTransient by remember(runtimeId) { mutableStateOf(false) }
+    fun showChatActionUnavailable(message: String) {
+        commandFeedbackTransient = false
+        commandFeedback = message
+    }
     var showDeliveryChoices by remember(runtimeId, sessionId) { mutableStateOf(false) }
     // 这个 composer 上挂着的上传任务（taskId）。只有传完的才能随消息发出。
     // 关联记在 ViewModel（按会话）：退出会话窗口再回来，chip 原样恢复——上传不因退出窗口取消。
@@ -1851,6 +1839,7 @@ internal fun ChatScreen(
     var editCommandId by rememberSaveable(runtimeId, sessionId) { mutableStateOf<String?>(null) }
     var editError by rememberSaveable(runtimeId, sessionId) { mutableStateOf<String?>(null) }
     var editRetryToken by rememberSaveable(runtimeId, sessionId) { mutableStateOf<String?>(null) }
+    var editOutcomeUnconfirmed by rememberSaveable(runtimeId, sessionId) { mutableStateOf(false) }
     var reservedAttachmentSlots by rememberSaveable(runtimeId, sessionId) { mutableIntStateOf(0) }
     val canEditMessage = runtime?.isCodex == true && runtime.status == "idle" && state.e2eReady &&
         conversation.sourceReady && conversation.queuedMessages.isEmpty() &&
@@ -1866,7 +1855,9 @@ internal fun ChatScreen(
             editRetryToken = null
             model.refreshAfterBranchAction(runtimeId)
         } else {
-            editError = receipt.error?.let { L10n.hostText(it) } ?: L10n.tr("编辑重发未成功")
+            editOutcomeUnconfirmed = receipt.status == "unconfirmed"
+            editError = if (editOutcomeUnconfirmed) L10n.tr("重发结果待确认，请先核对对话。")
+                else receipt.error?.let { L10n.hostText(it) } ?: L10n.tr("编辑重发未成功")
             if (historyEditWasRewound(receipt.result)) {
                 editRetryToken = (receipt.result as? kotlinx.serialization.json.JsonObject)
                     ?.get("retryToken")?.jsonPrimitive?.contentOrNull
@@ -2232,7 +2223,7 @@ internal fun ChatScreen(
                     editCommandId = executeSlash("edit-message", payload)
                     if (editCommandId == null) editError = L10n.tr("编辑重发未成功")
                 }
-            }, enabled = canEditMessage && !busy && payload != null, filled = true, dismissOnClick = false) },
+            }, enabled = canEditMessage && !busy && !editOutcomeUnconfirmed && payload != null, filled = true, dismissOnClick = false) },
         )
     }
     if (modelConfigurationOpen) SessionModelConfigurationSheet(state, runtimeId,
@@ -2658,13 +2649,19 @@ internal fun ChatScreen(
                             previewImage = if (state.e2eReady && !kimiCode) ({ path -> model.downloadFile(path, previewOnly = true) }) else null,
                             downloadArtifact = { artifact -> if (model.downloadArtifact(artifact)) chatFlight.launch() },
                             downloadFile = { path -> if (model.downloadFile(path)) chatFlight.launch() },
-                            onEdit = if (canEditMessage && item.message.messageId in firstUserMessageIds && state.pendingSends[item.message.messageId] == null) {
-                                editableEntries[item.message.messageId]?.let { entryId ->
-                                    {
-                                        editText = item.message.content.filter { it.type == "text" }.mapNotNull { it.text }.joinToString("\n")
-                                        editError = null
-                                        editRetryToken = null
-                                        editEntryId = entryId
+                            onEdit = if (runtime?.isCodex == true && item.message.content.any { it.type == "text" && !it.text.isNullOrBlank() }) {
+                                {
+                                    val entryId = actionEntries[item.message.messageId]
+                                    when {
+                                        !canEditMessage -> showChatActionUnavailable(L10n.tr("暂时不能编辑：请等待会话空闲并同步完成，确认 Host 已更新。"))
+                                        entryId == null -> showChatActionUnavailable(L10n.tr("这条消息尚未同步，暂时不能编辑。"))
+                                        else -> {
+                                            editText = item.message.content.filter { it.type == "text" }.mapNotNull { it.text }.joinToString("\n")
+                                            editError = null
+                                            editRetryToken = null
+                                            editOutcomeUnconfirmed = false
+                                            editEntryId = entryId
+                                        }
                                     }
                                 }
                             } else null,
@@ -2675,11 +2672,19 @@ internal fun ChatScreen(
                         )
 
                         is ChatListItem.AssistantTurn -> AssistantTurnCard(
-                            onFork = if (canForkReply && forkCommandId == null) {
-                                item.completedMessageIds.mapNotNull { messageTurnTimings[it] }
-                                    .filter { it.durationMs != null }.maxByOrNull { it.startedAt }?.turnId?.let { turnId ->
-                                        { forkCommandId = executeSlash("fork", turnId) }
+                            onFork = if (runtime?.isCodex == true && item.messages.any { it.role == "assistant" }) {
+                                {
+                                    val entryId = item.messages.lastOrNull { it.role == "assistant" }?.let { actionEntries[it.messageId] }
+                                    when {
+                                        forkCommandId != null -> Unit
+                                        !canForkReply -> showChatActionUnavailable(L10n.tr("暂时不能创建分支：请等待会话空闲并确认 Host 已更新。"))
+                                        entryId == null -> showChatActionUnavailable(L10n.tr("这条回复尚未同步，暂时不能创建分支。"))
+                                        else -> {
+                                            forkCommandId = executeSlash("fork", "entry:$entryId")
+                                            if (forkCommandId == null) showChatActionUnavailable(L10n.tr("未能发送创建分支请求。"))
+                                        }
                                     }
+                                }
                             } else null,
                             cardId = item.key,
                             runtimeId = runtimeId,
@@ -3917,10 +3922,6 @@ internal fun UserMessageCard(
             }
             if (pending != null) {
                 PendingSendStatus(pending, canResend, onPendingAction)
-            } else if (onEdit != null) {
-                NeumorphIconButton(onClick = onEdit, icon = Icons.Rounded.Edit,
-                    contentDescription = L10n.tr("编辑并重发"), size = 28.dp, compact = true,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -3994,43 +3995,46 @@ internal fun AssistantTurnCard(
         ReplyCardPart("${message.messageId}:$index:${block.type}", block.text.orEmpty())
     } } }
     val content = remember(messages) { assistantCardContent(messages) }
-    GrowingReplyCard(cardId, motionParts, messages.any { it.messageId in streamingMessageIds }, replyArrivals) {
-        Column(Modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            content.items.forEachIndexed { index, item ->
-                when (item) {
-                    is AssistantCardItem.Message -> key(runtimeId, "message:$index:${item.message.messageId}") {
-                        CompositionLocalProvider(LocalStreamingText provides (item.message.messageId in streamingMessageIds)) {
-                            AssistantTurnMessage(
-                                runtimeId = runtimeId,
-                                message = item.message,
-                                toolActivities = toolActivities,
-                                toolResults = toolResults,
-                                downloads = downloads,
-                                downloadArtifact = downloadArtifact,
-                                downloadFile = downloadFile,
-                            )
+    val copyText = remember(copyMessages) {
+        copyMessages.flatMap { it.content.mapNotNull(RemoteContent::replyCopyText) }.joinToString("\n\n")
+    }
+    val live = messages.any { it.messageId in streamingMessageIds }
+    val complete = !live && (turnTiming == null || turnTiming.durationMs != null)
+    Column {
+        GrowingReplyCard(cardId, motionParts, live, replyArrivals) {
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                content.items.forEachIndexed { index, item ->
+                    when (item) {
+                        is AssistantCardItem.Message -> key(runtimeId, "message:$index:${item.message.messageId}") {
+                            CompositionLocalProvider(LocalStreamingText provides (item.message.messageId in streamingMessageIds)) {
+                                AssistantTurnMessage(
+                                    runtimeId = runtimeId,
+                                    message = item.message,
+                                    toolActivities = toolActivities,
+                                    toolResults = toolResults,
+                                    downloads = downloads,
+                                    downloadArtifact = downloadArtifact,
+                                    downloadFile = downloadFile,
+                                )
+                            }
+                        }
+                        is AssistantCardItem.ToolGroup -> key(runtimeId, "tools:$index:${item.calls.first().key}") {
+                            ChatToolGroup(runtimeId, item.calls, toolActivities, toolResults,
+                                downloads, downloadArtifact, downloadFile)
                         }
                     }
-                    is AssistantCardItem.ToolGroup -> key(runtimeId, "tools:$index:${item.calls.first().key}") {
-                        ChatToolGroup(runtimeId, item.calls, toolActivities, toolResults,
-                            downloads, downloadArtifact, downloadFile)
-                    }
                 }
+                fileChanges()
             }
-            fileChanges()
-            val copyText = remember(copyMessages) {
-                copyMessages.flatMap { it.content.mapNotNull(RemoteContent::replyCopyText) }.joinToString("\n\n")
-            }
-            val complete = turnTiming?.durationMs != null || turnTiming == null && streamingMessageIds.isEmpty()
-            if (turnTiming != null || complete && (copyText.isNotBlank() || onFork != null)) {
-                Row(Modifier.fillMaxWidth().testTag("reply-footer"), verticalAlignment = Alignment.CenterVertically) {
-                    if (complete && copyText.isNotBlank()) CopyIconButton(L10n.tr("复制回复"), size = 36.dp) { copyText }
-                    if (complete && onFork != null) androidx.compose.material3.IconButton(onClick = onFork, modifier = Modifier.size(40.dp)) {
-                        Icon(OrbisSymbols.Fork, contentDescription = L10n.tr("从这条回复创建分支"), modifier = Modifier.size(18.dp))
-                    }
-                    Spacer(Modifier.weight(1f))
-                    turnTiming?.let { TurnDurationLabel(it, nowMs) }
+        }
+        if (turnTiming != null || complete && (copyText.isNotBlank() || onFork != null)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp).testTag("reply-footer"), verticalAlignment = Alignment.CenterVertically) {
+                if (complete && copyText.isNotBlank()) ReplyCopyButton(L10n.tr("复制回复"), identity = cardId) { copyText }
+                if (complete && onFork != null) ReplyActionButton(L10n.tr("从这条回复创建分支"), onFork) {
+                    Icon(OrbisSymbols.Fork, contentDescription = null, modifier = Modifier.size(16.dp))
                 }
+                Spacer(Modifier.weight(1f))
+                turnTiming?.let { TurnDurationLabel(it, nowMs) }
             }
         }
     }
@@ -4069,7 +4073,7 @@ private fun ChatToolGroup(
             status = status, showStatus = running || failed,
             tint = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
         OrbisCollapse(expanded) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 calls.take(visible).forEach { callView(it) }
                 if (visible < calls.size) NeumorphTextButton(L10n.tr("显示更多工具（剩余 {0} 项）", calls.size - visible),
                     onClick = { visible += CHAT_TOOL_PAGE_SIZE }, modifier = Modifier.fillMaxWidth())
@@ -4120,7 +4124,7 @@ private fun MessageBlocks(
     downloadFile: (String) -> Unit,
     previewImage: ((String) -> Unit)? = null,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(if (message.role == "user") 8.dp else 3.dp)) {
         message.content.forEachIndexed { index, block ->
             key(block.toolCallId ?: "${message.messageId}:$index:${block.type}") {
             if (block.type == "render") {

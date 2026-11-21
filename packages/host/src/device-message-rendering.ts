@@ -3,6 +3,8 @@ import {
   normalizeCodexMessage, projectDisplayEntries, renderStreamingMarkdown, hasCitationSuffix, hasCodexDirective,
   type ChatMessage, type RemoteSessionEntry, type RuntimeEvent,
 } from "@orbis/protocol";
+import { tmpdir } from "node:os";
+import { codexUserAttachmentEnvelope } from "./codex-user-attachment-envelope.js";
 import { MessageFileReferences } from "./message-file-references.js";
 
 const maxStreams = 64;
@@ -67,7 +69,28 @@ export class DeviceMessageRendering {
           file: { fileName: name, referenceId: file.referenceId } };
     }) });
     const project = (value: ChatMessage, streaming = false): ChatMessage => {
-      const normalized = projectMedia(options.codex ? normalizeCodexMessage(value, resolve, streaming) : value);
+      let normalized = projectMedia(options.codex ? normalizeCodexMessage(value, resolve, streaming) : value);
+      if (options.codex && value.role === "user") {
+        const images = new Set(normalized.content.flatMap(block => block.type === "render" && block.renderKind === "file_reference" && block.file
+          ? [block.file.fileName.toLowerCase()] : []));
+        normalized = { ...normalized, content: normalized.content.flatMap((block): ChatMessage["content"] => {
+          if (block.type !== "text") return [block];
+          const envelope = codexUserAttachmentEnvelope(block.text);
+          if (!envelope) return [block];
+          return [
+            ...(envelope.text ? [{ ...block, text: envelope.text }] : []),
+            ...envelope.clipboardNames.flatMap((name): ChatMessage["content"] => {
+              if (images.has(name.toLowerCase())) return [];
+              images.add(name.toLowerCase());
+              // Resolve relative to the actual Host temp directory; the existing resolver
+              // confines real paths to this root, including when a symlink exists.
+              const file = options.rich ? this.#files.register(name, tmpdir(), deviceId, runtimeId) : undefined;
+              return file ? [{ type: "render", renderKind: "file_reference", text: name, file: { fileName: name, referenceId: file.referenceId } }]
+                : [{ type: "render", renderKind: "image", text: name }];
+            }),
+          ];
+        }) };
+      }
       if (!options.rich) return downgradeMessageForLegacy(normalized);
       if (streaming || !options.generatedImagePath || !normalized.content.some(block => block.type === "render" && block.renderKind === "codex_generated_image")) return normalized;
       const path = options.generatedImagePath(normalized.messageId);

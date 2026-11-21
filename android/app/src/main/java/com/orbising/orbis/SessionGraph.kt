@@ -326,6 +326,17 @@ internal fun projectSessionGraph(graph: SessionGraph): SessionProjectionResult {
     )
 }
 
+/** Actions address the native entry, not the optional timing anchor or temporary send id. */
+internal fun SessionGraph.messageActionEntries(): Map<String, String> = buildMap {
+    for (entry in buildSessionPath(this@messageActionEntries.entries, cursor.leafId)) {
+        val message = display[entry.entryId]?.message ?: continue
+        if (message.role != "user" && message.role != "assistant") continue
+        put(message.messageId, entry.entryId)
+        message.clientMessageId?.let { put(it, entry.entryId) }
+        message.clientMessageIds.orEmpty().forEach { put(it, entry.entryId) }
+    }
+}
+
 /** 一段不在完整路径上的条目（有界页）：窗口与锚点照旧由显示状态决定。 */
 internal fun projectSessionEntries(
     entries: List<SessionGraphEntry>,

@@ -120,7 +120,7 @@ internal fun ChatDisclosureRow(
     }
 }
 
-private val ToolDisclosureMinHeight = 44.dp
+private val ToolDisclosureMinHeight = 28.dp
 
 @Composable
 private fun SummaryCaption(text: String) {

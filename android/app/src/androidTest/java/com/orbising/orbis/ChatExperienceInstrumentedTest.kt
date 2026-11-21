@@ -9,6 +9,8 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.longClick
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -80,7 +82,8 @@ class ChatExperienceInstrumentedTest {
         compose.setContent {
             OrbisTheme { UserMessageCard("r", user, emptyMap(), {}, {}, onEdit = { opened = true }) }
         }
-        compose.onNodeWithContentDescription("编辑并重发").performClick()
+        compose.onNodeWithText("Original").performTouchInput { longClick() }
+        compose.onNodeWithText("编辑并重发").performClick()
         compose.runOnIdle { assertTrue(opened) }
     }
 

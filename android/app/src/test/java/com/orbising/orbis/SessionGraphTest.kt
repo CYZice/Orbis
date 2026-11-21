@@ -10,6 +10,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SessionGraphTest {
+    @Test
+    fun `message actions find committed entries without a timing anchor`() {
+        val user = SessionGraphEntry("user-entry", type = "message", timestamp = "0")
+        val answer = SessionGraphEntry("answer-entry", user.entryId, "message", "0")
+        val graph = SessionGraph("session", entries = listOf(user, answer).associateBy { it.entryId },
+            cursor = SessionBranchCursor(answer.entryId), display = mapOf(
+                user.entryId to DisplayEntry(user.entryId, kind = "message", message = ChatMessage("display-user", "user", emptyList(), 0, clientMessageId = "pending-id")),
+                answer.entryId to DisplayEntry(answer.entryId, kind = "message", message = ChatMessage("display-answer", "assistant", emptyList(), 0)),
+            ))
+        assertEquals(mapOf("display-user" to "user-entry", "pending-id" to "user-entry", "display-answer" to "answer-entry"), graph.messageActionEntries())
+    }
+
     private fun entry(id: String, parentId: String?, role: String = "user", text: String = id) = SessionGraphEntry(
         entryId = id,
         parentId = parentId,

@@ -25,12 +25,13 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { open, readdir, readFile, stat } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { displayBatchFor, NotificationSource, SessionSyncPreparer, SESSION_SYNC_PAGE_BYTES, SESSION_SYNC_WRAPPER_BYTES, ToolInventorySource, WireTruncator, projectWireLive } from "@orbis/protocol";
 import { orbisEnvironment, messageInputDecision, canDispatchMessage, inputMutationError, configurationMutationError, type RuntimeInputState } from "@orbis/protocol";
 import { ToolContentCapture, ToolContentReadError, type ToolContentReader, type ToolContentStore } from "@orbis/runtime-bridge";
+import { codexUserAttachmentEnvelope } from "./codex-user-attachment-envelope.js";
 import { CodexToolContentReader } from "./codex-tool-content-reader.js";
 import { CodexAgentTasks, codexChildThread } from "./codex-agent-tasks.js";
 import { CodexTaskRegistry } from "./codex-task-registry.js";
@@ -253,6 +254,7 @@ function originalUserInputFromItem(item: Record<string, unknown>): OriginalUserI
       skills.push({ name: part.name, path: part.path });
     }
   }
+  for (const name of codexUserAttachmentEnvelope(text)?.clipboardNames ?? []) attachments.add(join(tmpdir(), name));
   const marker = text.lastIndexOf(attachmentSection);
   if (marker >= 0) for (const path of text.slice(marker + attachmentSection.length).trim().split("\n")) {
     if (path.trim()) attachments.add(path.trim());
@@ -3259,8 +3261,17 @@ export class CodexRuntime implements AgentBackend {
    * 只服务 `/fork` 命令（用户主动开一条新线）。历史树的动作**不走这里**——那是原地 revert，
    * 不派生会话。
    */
-  async #forkThread(thread: ThreadState | undefined, lastTurnId?: string): Promise<BackendActivation> {
+  async #forkThread(thread: ThreadState | undefined, anchor?: string): Promise<BackendActivation> {
     if (thread === undefined) throw new Error("没有活跃的 Codex 会话");
+    let lastTurnId = anchor;
+    if (anchor?.startsWith("entry:")) {
+      const id = anchor.slice("entry:".length);
+      const entry = thread.entries.find(candidate => candidate.entryId === id);
+      lastTurnId = thread.entryTurns.get(id);
+      if (!entry || entryMessage(entry)?.role !== "assistant" || !lastTurnId) {
+        throw new Error("这条回复的 Codex 轮次不可用，暂时不能创建分支。");
+      }
+    }
     // thread/fork 的广播同样可能先于响应到达：与 activate 一样纳入在途计数。
     this.#activating += 1;
     try {
