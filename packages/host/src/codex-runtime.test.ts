@@ -1720,8 +1720,8 @@ describe("CodexRuntime", () => {
       { id: "bad", name: "", roots: [{ path: "D:/Wrong" }] },
     ] });
     expect(await listing).toEqual([
-      { cwd: "D:/PIC", name: "Research", recencyAt: 1_782_812_790_000 },
-      { cwd: "D:/Other", name: "Misc" },
+      { cwd: "D:/PIC", name: "Research", projectId: "p1", recencyAt: 1_782_812_790_000 },
+      { cwd: "D:/Other", name: "Misc", projectId: "p2" },
     ]);
     const unsupported = h.runtime.listProjects();
     h.rejectNext(new Error("method not found"));

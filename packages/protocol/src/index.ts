@@ -1516,6 +1516,7 @@ export const RelayToDeviceMessageSchema = z.discriminatedUnion("type", [
     nativeProjects: z.array(z.strictObject({
       cwd: z.string().min(1).max(4096),
       name: z.string().min(1).max(256),
+      projectId: z.string().min(1).max(256).optional(),
       recencyAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
     })).max(160).optional(),
     /** Backend configuration, including when the backend has no sessions. */

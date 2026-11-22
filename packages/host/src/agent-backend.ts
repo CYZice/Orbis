@@ -72,7 +72,7 @@ export interface AgentBackend {
   catalog(archived?: boolean): Promise<AgentSessionSummary[]>;
   catalogCoverage?(archived?: boolean): Promise<{ sessions: AgentSessionSummary[]; complete: boolean }>;
   /** Optional native Codex projects; other backends simply omit this capability. */
-  listProjects?(): Promise<Array<{ cwd: string; name: string; recencyAt?: number }>>;
+  listProjects?(): Promise<Array<{ cwd: string; name: string; projectId?: string; recencyAt?: number }>>;
   /** Effective configured provider, independent of any open session. Unknown on failure. */
   currentProvider?(): Promise<string | undefined>;
   sessionConfiguration?(cwd: string): Promise<SessionConfigurationCatalog>;

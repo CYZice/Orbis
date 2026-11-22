@@ -1417,14 +1417,15 @@ export class CodexRuntime implements AgentBackend {
 
   /** Native Codex Desktop projects, when supported by the installed app-server.
    * Older binaries do not expose the experimental API; callers fall back to known cwds. */
-  async listProjects(): Promise<Array<{ cwd: string; name: string; recencyAt?: number }>> {
+  async listProjects(): Promise<Array<{ cwd: string; name: string; projectId?: string; recencyAt?: number }>> {
     try {
       const response = await this.#server.request("project/list",
         { sortKey: "recencyAt", sortDirection: "desc", limit: 80 }) as {
-        data?: Array<{ name?: unknown; roots?: unknown; recencyAt?: unknown }>;
+        data?: Array<{ id?: unknown; name?: unknown; roots?: unknown; recencyAt?: unknown }>;
       };
-      const projects: Array<{ cwd: string; name: string; recencyAt?: number }> = [];
+      const projects: Array<{ cwd: string; name: string; projectId?: string; recencyAt?: number }> = [];
       for (const project of response.data ?? []) {
+        const projectId = typeof project.id === "string" && project.id.trim().length > 0 && project.id.length <= 256 ? project.id : undefined;
         const name = typeof project.name === "string" ? project.name.trim() : "";
         if (!name || name.length > 256 || !Array.isArray(project.roots)) continue;
         const recencyAt = toMillis(project.recencyAt);
@@ -1432,7 +1433,7 @@ export class CodexRuntime implements AgentBackend {
           if (typeof root !== "object" || root === null || Array.isArray(root)) continue;
           const path = (root as Record<string, unknown>).path;
           if (typeof path !== "string" || path.length === 0 || path.length > 4096) continue;
-          projects.push({ cwd: path, name, ...(recencyAt === undefined ? {} : { recencyAt }) });
+          projects.push({ cwd: path, name, ...(projectId === undefined ? {} : { projectId }), ...(recencyAt === undefined ? {} : { recencyAt }) });
         }
       }
       return projects.slice(0, 120);

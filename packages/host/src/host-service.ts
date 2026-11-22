@@ -2825,7 +2825,7 @@ export class HostService {
         const localHostname = hostname();
         // Preserve native project order and bound the optional payload for small phone screens.
         const nativeProjects = [...new Map(projectPages.flat().map(project => [
-          process.platform === "win32" ? project.cwd.toLowerCase() : project.cwd, project,
+          `${project.projectId ?? project.name}\u0000${process.platform === "win32" ? project.cwd.toLowerCase() : project.cwd}`, project,
         ] as const)).values()].slice(0, 120);
         const payload = {
           type: "session.list.result" as const,
