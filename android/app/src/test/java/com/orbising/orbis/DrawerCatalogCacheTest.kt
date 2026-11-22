@@ -59,8 +59,8 @@ class DrawerCatalogCacheTest {
         val after = cache.get(next)
         assertNotSame(before, after)
         assertEquals(cachedHistoryTree(next), after)
-        assertEquals("/moved", after.single().directories.first().cwd)
-        assertEquals("Updated", after.single().directories.first().sessions.single().title)
+        assertEquals("无项目的聊天", after.single().directories.single().label)
+        assertEquals("Updated", after.single().directories.single().sessions.first { it.sessionId == "second" }.title)
     }
 
     @Test fun `runtime name identity online state and removal invalidate`() {

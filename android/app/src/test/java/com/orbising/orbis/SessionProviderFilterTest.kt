@@ -7,6 +7,7 @@ import org.junit.Test
 
 class SessionProviderFilterTest {
     private val reducer = RelayReducer()
+    private fun rows(state: RemoteState) = cachedHistoryTree(state).flatMap { host -> host.directories.flatMap { it.sessions } }
     private fun entry(id: String, provider: String?, agent: String = "codex") = SessionCatalogEntry(
         sessionId = id, name = id, cwd = "D:/repo", hostname = "desktop", agentKind = agent,
         modelProvider = provider, hasHistoryCache = true,
@@ -17,7 +18,7 @@ class SessionProviderFilterTest {
     ).associateBy { it.sessionId }
 
     @Test fun `current provider filter follows configuration and never guesses unknown ownership`() {
-        val rows = cachedHistoryTree(RemoteState(hostId = "paired-host", sessions = sessions)).single().directories.single().sessions
+        val rows = rows(RemoteState(hostId = "paired-host", sessions = sessions))
         fun matching(key: String, current: String?) = rows.filter { it.isCodex && matchesCodexProvider(it, key, current) }.map { it.sessionId }.toSet()
         assertEquals(setOf("current"), matching(CURRENT_CODEX_PROVIDER, "custom"))
         assertEquals(setOf("other"), matching(CURRENT_CODEX_PROVIDER, "openai"))
@@ -44,7 +45,7 @@ class SessionProviderFilterTest {
             "name":"Codex","cwd":"D:/repo","status":"idle","model":{"provider":"custom","id":"model"}}
         }""")
         assertEquals("openai", state.sessions["other"]?.modelProvider)
-        assertEquals("openai", cachedHistoryTree(state).single().directories.single().sessions.first { it.sessionId == "other" }.modelProvider)
+        assertEquals("openai", rows(state).first { it.sessionId == "other" }.modelProvider)
     }
 
     @Test fun `catalog updates providers independently of sessions and clears stale config on failure or disconnect`() {
@@ -83,7 +84,7 @@ class SessionProviderFilterTest {
         assertEquals(listOf(CURRENT_CODEX_PROVIDER, ALL_CODEX_PROVIDERS, "provider:desktop-only", UNKNOWN_CODEX_PROVIDER), desktop.map { it.key })
         assertEquals("custom（当前使用）", desktop.first().label)
         assertFalse(codexProviderOptions(tree, "custom", "codex").any { it.key == "provider:desktop-only" })
-        val rows = tree.single().directories.single().sessions.filter { it.agentKind == "codexDesktop" }
+        val rows = tree.flatMap { host -> host.directories.flatMap { it.sessions } }.filter { it.agentKind == "codexDesktop" }
         assertEquals(listOf("desktop-current"), rows.filter { matchesCodexProvider(it, CURRENT_CODEX_PROVIDER, "custom") }.map { it.sessionId })
         assertEquals(listOf("desktop-other"), rows.filter { matchesCodexProvider(it, providerFilterKey("desktop-only"), "custom") }.map { it.sessionId })
         assertEquals(listOf("desktop-unknown"), rows.filter { matchesCodexProvider(it, UNKNOWN_CODEX_PROVIDER, "custom") }.map { it.sessionId })
@@ -106,7 +107,7 @@ class SessionProviderFilterTest {
         assertEquals("昨天 09:05", sessionTimeText(ms(10, 28), now, zone))
         assertEquals("3月2日", sessionTimeText(ms(3, 2), now, zone))
         assertEquals("2025年12月31日", sessionTimeText(ms(12, 31, 2025), now, zone))
-        val rows = cachedHistoryTree(RemoteState(hostId = "paired-host", sessions = sessions)).single().directories.single().sessions
+        val rows = rows(RemoteState(hostId = "paired-host", sessions = sessions))
         val other = rows.single { it.sessionId == "other" }
         assertEquals("openai", sessionOtherProvider(other, "custom"))
         assertNull(sessionOtherProvider(other, "openai"))

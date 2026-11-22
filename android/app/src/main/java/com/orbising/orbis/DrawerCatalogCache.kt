@@ -15,6 +15,7 @@ internal class DrawerCatalogCache(private val titles: SessionTitleCache = Sessio
         if (this.language == language && (previous === state ||
                 previous != null && state != null &&
                 previous.hostId == state.hostId && previous.hostName == state.hostName && previous.kimiCodeSupported == state.kimiCodeSupported &&
+                previous.nativeCodexProjects === state.nativeCodexProjects &&
                 previous.sessions === state.sessions && previous.runtimes === state.runtimes &&
                 previous.sessionGraphs === state.sessionGraphs &&
                 previous.conversations === state.conversations && previous.ledger === state.ledger)) {
@@ -25,6 +26,7 @@ internal class DrawerCatalogCache(private val titles: SessionTitleCache = Sessio
         if (previous?.hostId != state?.hostId) titles.clear()
         if (this.language == language && previous != null && state != null &&
             previous.hostId == state.hostId && previous.hostName == state.hostName && previous.kimiCodeSupported == state.kimiCodeSupported &&
+            previous.nativeCodexProjects === state.nativeCodexProjects &&
             previous.sessions === state.sessions && previous.runtimes === state.runtimes &&
             (previous.ledger === state.ledger || OperationKinds.archiveOverrides(previous.ledger) == OperationKinds.archiveOverrides(state.ledger)) &&
             !catalogTranscriptChanged(previous, state, titles, counts = true)) {
@@ -41,8 +43,9 @@ internal class DrawerCatalogCache(private val titles: SessionTitleCache = Sessio
         // references without changing a single drawer row. Preserve the grouped tree in that case.
         if (host == null) tree = emptyList()
         else if (this.language != language || previous?.hostId != state.hostId ||
+            previous?.nativeCodexProjects !== state.nativeCodexProjects ||
             previous?.hostName != state.hostName || tree.firstOrNull()?.hostname != host.name || nextRows != rows) {
-            tree = groupCachedHistoryRows(host.hostId, host.name, nextRows)
+            tree = groupCachedHistoryRows(host.hostId, host.name, nextRows, state.nativeCodexProjects)
         }
         rows = nextRows
         source = state

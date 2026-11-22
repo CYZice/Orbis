@@ -35,6 +35,7 @@ internal class DrawerCatalogRequest(val state: RemoteState?, val language: AppLa
 
     override fun equals(other: Any?): Boolean = other is DrawerCatalogRequest && sameView(other) && prepared === other.prepared &&
         state?.hostName == other.state?.hostName && state?.sessions === other.state?.sessions &&
+        state?.nativeCodexProjects === other.state?.nativeCodexProjects &&
         state?.runtimes === other.state?.runtimes && state?.sessionGraphs === other.state?.sessionGraphs &&
         state?.catalogQuery === other.state?.catalogQuery &&
         state?.conversations === other.state?.conversations && state?.ledger === other.state?.ledger
@@ -84,7 +85,9 @@ internal class DrawerCatalogWorker(
         val provider = filter.requestedProvider.takeIf { key -> options.any { it.key == key } } ?: CURRENT_CODEX_PROVIDER
         val sections = tree.mapNotNull { host ->
             val directories = host.directories.mapNotNull { directory ->
-                val matchesPath = filter.query.isEmpty() || directory.cwd.contains(filter.query, ignoreCase = true)
+                val matchesPath = filter.query.isEmpty() || directory.cwd.contains(filter.query, ignoreCase = true) ||
+                    directory.label?.contains(filter.query, ignoreCase = true) == true ||
+                    directory.sessions.any { it.cwd.contains(filter.query, ignoreCase = true) }
                 val sessions = directory.sessions.filter { row ->
                     agent.matches(row) && row.isArchived == filter.archived &&
                         (!agent.hasProviderFilter || host.hostId != request.state?.hostId ||

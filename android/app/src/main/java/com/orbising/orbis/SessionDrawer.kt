@@ -265,7 +265,7 @@ internal fun SessionDrawer(
     var expandedKey by rememberSaveable(activeHostId, searchTerm, agentFilterKey, providerKey, currentProvider) {
         mutableStateOf(
             sections.firstOrNull()?.let { section ->
-                section.directories.firstOrNull()?.let { section.hostId + '\u0000' + it.cwd }
+                section.directories.firstOrNull()?.let { section.hostId + '\u0000' + it.key }
             },
         )
     }
@@ -273,7 +273,7 @@ internal fun SessionDrawer(
         mutableStateOf(true)
     }
     val firstDirectoryKey = sections.firstOrNull()?.let { section ->
-        section.directories.firstOrNull()?.let { section.hostId + '\u0000' + it.cwd }
+        section.directories.firstOrNull()?.let { section.hostId + '\u0000' + it.key }
     }
     LaunchedEffect(firstDirectoryKey, needsDefaultExpansion) {
         if (needsDefaultExpansion && firstDirectoryKey != null) {
@@ -283,9 +283,12 @@ internal fun SessionDrawer(
     }
     var showAllSessions by rememberSaveable(activeHostId, searchTerm, agentFilterKey, providerKey, currentProvider, expandedKey) { mutableStateOf(false) }
     var showAllDirectories by rememberSaveable(viewportIdentity) { mutableStateOf(false) }
+    val expandedDirectory = sections.asSequence().flatMap { section -> section.directories.asSequence()
+        .map { section.hostId + '\u0000' + it.key to it } }.firstOrNull { it.first == expandedKey }?.second
+    val expandedDirectoryPath = expandedDirectory?.takeIf { it.projectId == null && !it.isUnassignedCodex }?.cwd
     val networkQuery = CatalogQuery(searchTerm.take(256), agentFilterKey.takeUnless { it == "all" }, showArchived,
         requestedProviderKey.takeIf { agentFilter.hasProviderFilter } ?: "all",
-        directory = expandedKey?.substringAfter('\u0000')?.takeIf { showAllSessions }?.let(::catalogDirectoryId))
+        directory = expandedDirectoryPath?.takeIf { showAllSessions }?.let(::catalogDirectoryId))
     val queryResult = state.catalogQuery?.takeIf { it.query == networkQuery }
     LaunchedEffect(activeHostId, isOpen, pageActive, networkQuery, currentProvider) {
         if (isOpen && pageActive) {
@@ -305,11 +308,12 @@ internal fun SessionDrawer(
     }
     val allDirectoryItems = remember(sections, expandedKey, showAllSessions, searchTerm, queryResult) {
         sections.flatMap { section -> section.directories.map { directory ->
-            val branchKey = section.hostId + '\u0000' + directory.cwd
+            val branchKey = section.hostId + '\u0000' + directory.key
             val expanded = branchKey == expandedKey
+            val queryDirectory = directory.takeUnless { it.isUnassignedCodex || it.projectId != null }?.cwd
             DrawerDirectoryItems(section.hostId, directory, branchKey, expanded,
                 if (expanded && (showAllSessions || searchTerm.isNotEmpty())) directory.sessions else directory.sessions.take(3),
-                maxOf(directory.sessions.size, queryResult?.directoryTotals?.get(directory.cwd) ?: 0) > 3 && searchTerm.isEmpty())
+                maxOf(directory.sessions.size, queryDirectory?.let { queryResult?.directoryTotals?.get(it) } ?: 0) > 3 && searchTerm.isEmpty())
         } }
     }
     val directoryItems = if (showAllDirectories || searchTerm.isNotEmpty()) allDirectoryItems else allDirectoryItems.take(3)
@@ -552,7 +556,7 @@ internal fun SessionDrawer(
                                             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
                                                 .orbisKeyboardFocus().clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { showAllSessions = !showAllSessions },
                                                 verticalAlignment = Alignment.CenterVertically) {
-                                                Text(if (showAllSessions) L10n.tr("收起较早会话") else L10n.tr("查看全部 {0} 条", maxOf(directory.sessions.size, queryResult?.directoryTotals?.get(directory.cwd) ?: 0)),
+                                                Text(if (showAllSessions) L10n.tr("收起较早会话") else L10n.tr("查看全部 {0} 条", maxOf(directory.sessions.size, drawerQueryTotal(directory, queryResult))),
                                                     modifier = Modifier.weight(1f), style = MaterialTheme.typography.labelLarge,
                                                     color = MaterialTheme.colorScheme.primary)
                                                 Icon(if (showAllSessions) Icons.Rounded.ExpandLess else OrbisSymbols.ChevronRight,
@@ -733,14 +737,14 @@ private fun DrawerDirectoryHeader(directory: CachedDirectoryGroup, expanded: Boo
     onCreate: () -> Unit, onClick: () -> Unit) {
     val rotation by animateFloatAsState(if (expanded) 90f else 0f,
         androidx.compose.animation.core.tween(InteractionMotion.duration(InteractionMotion.Collapse)), label = "directory-disclosure")
-    NeumorphSurface(Modifier.fillMaxWidth().testTag("drawer-directory-${directory.cwd}")
+    NeumorphSurface(Modifier.fillMaxWidth().testTag("drawer-directory-${directory.key}")
         .semantics { stateDescription = if (expanded) L10n.tr("已展开") else L10n.tr("已收起") },
         shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp), shadowScale = 0.4f, onClick = onClick, flat = true) {
         Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Icon(if (expanded) OrbisSymbols.FolderFill else OrbisSymbols.Folder, null, modifier = Modifier.size(20.dp),
                 tint = if (expanded) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(directoryDisplayName(directory.cwd).ifBlank { L10n.tr("未记录目录") }, Modifier.weight(1f),
+            Text((directory.label ?: directoryDisplayName(directory.cwd)).ifBlank { L10n.tr("未记录目录") }, Modifier.weight(1f),
                 style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text("${directory.sessions.size}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Icon(OrbisSymbols.ChevronRight, if (expanded) L10n.tr("收起目录") else L10n.tr("展开目录"),
@@ -748,6 +752,10 @@ private fun DrawerDirectoryHeader(directory: CachedDirectoryGroup, expanded: Boo
         }
     }
 }
+
+private fun drawerQueryTotal(directory: CachedDirectoryGroup, queryResult: CatalogQueryResult?): Int =
+    maxOf(directory.sessions.size, directory.takeIf { it.projectId == null && !it.isUnassignedCodex }
+        ?.cwd?.let { queryResult?.directoryTotals?.get(it) } ?: 0)
 
 /** Navigation rows stay on the drawer face; only a press or current selection indents them. */
 @Composable

@@ -60,6 +60,28 @@ class CachedHistoryTreeTest {
     }
 
     @Test
+    fun `Codex sessions use named native projects and share one no-project group`() {
+        val state = RemoteState(
+            hostId = "paired-host",
+            hostName = "devbox",
+            sessions = mapOf(
+                "project-1" to session("project-1", "D:/work/orbis", 30).copy(agentKind = "codex"),
+                "project-2" to session("project-2", "d:\\work\\orbis", 20).copy(agentKind = "codex"),
+                "unassigned-1" to session("unassigned-1", "D:/notes", 10).copy(agentKind = "codex"),
+                "unassigned-2" to session("unassigned-2", "D:/scratch", 5).copy(agentKind = "codex"),
+            ),
+            nativeCodexProjects = listOf(NativeCodexProject("D:\\work\\orbis", "Orbis")),
+        )
+
+        val directories = cachedHistoryTree(state).single().directories
+
+        assertEquals(setOf("project-1", "project-2"), directories.first { it.label == "Orbis" }.sessions.map { it.sessionId }.toSet())
+        assertEquals(setOf("unassigned-1", "unassigned-2"), directories.first { it.isUnassignedCodex }.sessions.map { it.sessionId }.toSet())
+        assertEquals("无项目的聊天", directories.first { it.isUnassignedCodex }.label)
+        assertEquals(2, directories.size)
+    }
+
+    @Test
     fun `an online Claude Session without a catalog agent kind takes the runtime's committed identity`() {
         val claude = runtime("claude:s1", "s1", "D:\\work\\alpha", "devbox").copy(agentKind = "claude")
         val state = RemoteState(hostId = "paired-host", hostName = "devbox",
@@ -157,7 +179,8 @@ class CachedHistoryTreeTest {
             val offline = RemoteState(hostId = "paired-host", hostName = "devbox", sessions = mapOf(entry.sessionId to cached))
             val host = cachedHistoryTree(offline).single()
             assertEquals("devbox", host.hostname)
-            assertEquals(entry.cwd, host.directories.single().cwd)
+            assertEquals("无项目的聊天", host.directories.single().label)
+            assertEquals("", host.directories.single().cwd)
             val row = host.directories.single().sessions.single()
             assertEquals(entry.sessionId, row.sessionId)
             assertEquals(false, row.isOnline)
