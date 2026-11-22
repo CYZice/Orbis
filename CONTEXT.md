@@ -46,6 +46,9 @@ The `agent` | `host` discriminator declared at authentication. Relay connections
 **Session ID**:
 An agent-backend-owned diagnostic identity for a Session.
 
+**Mobile session grouping**:
+The sidebar uses Codex's native named project roots when the Host supplies them; Codex sessions without a matching native project share one `Chats without a project` group. Pi, DeepSeek and Claude retain working-directory groups. A missing native project catalog is treated as no named Codex projects rather than inferred project folders.
+
 **Relay**:
 The authenticated forwarding boundary between paired devices and one Host. It routes opaque ciphertext using the routing header.
 
