@@ -154,6 +154,21 @@ struct PresentationTests {
         #expect(directorySessionPreviewLimit == 3)
     }
 
+    @Test func codexDirectoriesFollowNativeProjectsAndCollectUnassignedChats() {
+        var projectChat = session("project", cwd: "D:\\Work\\Orbis")
+        projectChat.modifiedAt = 30
+        var unassigned = session("unassigned", cwd: "D:/Notes")
+        unassigned.modifiedAt = 20
+        let directories = sessionDirectories([projectChat, unassigned], query: "", kind: nil, archived: false,
+                                             title: { $0.name ?? "" },
+                                             nativeProjects: [NativeCodexProject(cwd: "d:/work/orbis", name: "Orbis")])
+        #expect(directories.count == 2)
+        #expect(directories.first?.label == "Orbis")
+        #expect(directories.first?.sessions.map(\.sessionId) == ["project"])
+        #expect(directories.last?.isUnassignedCodex == true)
+        #expect(directories.last?.label == "无项目的聊天")
+    }
+
     /// Host 的 runtime 元数据不带 agentKind：Codex 不能因为缺字段被显示成 Pi。
     @Test func runtimeAgentKindComesFromCatalogThenHostRuntimeIds() {
         #expect(resolvedAgentKind(runtimeId: "codex:thread-1", declared: nil, catalogKind: nil) == "codex")

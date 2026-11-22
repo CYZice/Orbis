@@ -1163,6 +1163,7 @@ enum LocalizationCatalog {
         "查看会话信息": "View session info",
         "查看会话目录": "View sessions",
         "查看全部 {0} 个工作目录": "View all {0} working directories",
+        "无项目的聊天": "Chats without a project",
         "查看全部 {0} 条": "View all {0} entries",
         "查看只读历史": "View read-only history",
         "查看完整内容": "View full content",

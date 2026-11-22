@@ -422,6 +422,13 @@ struct SessionSummary: Codable, Hashable, Identifiable {
     var id: String { sessionId }
 }
 
+struct NativeCodexProject: Codable, Hashable {
+    let cwd: String
+    let name: String
+    let recencyAt: Int64? = nil
+    let projectId: String? = nil
+}
+
 struct MessageFileReference: Codable, Hashable {
     let fileName: String
     let referenceId: String?

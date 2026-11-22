@@ -163,7 +163,11 @@ func hostKeyPrefix(_ host: HostPairing) -> String {
 struct SessionDirectory: Identifiable {
     let path: String
     let sessions: [SessionSummary]
-    var id: String { path }
+    let label: String?
+    let projectId: String?
+    let isUnassignedCodex: Bool
+    var id: String { projectId ?? (isUnassignedCodex ? "codex-no-project" : path) }
+    var queryPath: String? { projectId == nil && !isUnassignedCodex ? path : nil }
     /// 目录的「最近使用」时间 = 其中最新会话的修改时间（与 Android `CachedDirectoryGroup.modifiedAt` 一致）。
     var modifiedAt: Int64 { sessions.map(\.modifiedAt).max() ?? 0 }
 }
@@ -173,26 +177,60 @@ let directorySessionPreviewLimit = 3
 
 /// 目录按最近使用排序：最新会话越新越靠前，同一时间再按路径；目录内会话按修改时间倒序。
 func sessionDirectories(_ sessions: [SessionSummary], query: String, kind: String?, archived: Bool,
-                        title: (SessionSummary) -> String) -> [SessionDirectory] {
+                        title: (SessionSummary) -> String,
+                        nativeProjects: [NativeCodexProject] = []) -> [SessionDirectory] {
     let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
-    let visible = sessions.filter { session in
-        (session.archived == true) == archived && (kind == nil || session.agentKind == kind) &&
-        (term.isEmpty || session.cwd.localizedCaseInsensitiveContains(term) || title(session).localizedCaseInsensitiveContains(term))
+    let projectsByPath = Dictionary(nativeProjects.filter { !$0.cwd.isEmpty && !$0.name.isEmpty }.map { (normalizedProjectPath($0.cwd), $0) },
+                                     uniquingKeysWith: { first, _ in first })
+    enum Group: Hashable { case working(String), project(String), unassigned }
+    let grouped = Dictionary(grouping: sessions.filter { session in
+        (session.archived == true) == archived && (kind == nil || session.agentKind == kind)
+    }) { session -> Group in
+        guard session.agentKind == "codex" || session.agentKind == "codexDesktop" else { return .working(session.cwd) }
+        return projectsByPath[normalizedProjectPath(session.cwd)].map { .project($0.projectId ?? "codex-project:\(normalizedProjectPath($0.cwd))") } ?? .unassigned
     }
-    return Dictionary(grouping: visible, by: \.cwd).map { path, sessions in
-        SessionDirectory(path: path, sessions: sessions.sorted { lhs, rhs in
+    return grouped.compactMap { group, groupedSessions in
+        let project: NativeCodexProject? = {
+            guard case .project(let id) = group else { return nil }
+            return nativeProjects.first { ($0.projectId ?? "codex-project:\(normalizedProjectPath($0.cwd))") == id }
+        }()
+        let path: String
+        let label: String?
+        let projectId: String?
+        let isUnassigned: Bool
+        switch group {
+        case .working(let value): path = value; label = nil; projectId = nil; isUnassigned = false
+        case .project(let id): path = project?.cwd ?? ""; label = project?.name; projectId = id; isUnassigned = false
+        case .unassigned: path = ""; label = L10n.tr("无项目的聊天"); projectId = nil; isUnassigned = true
+        }
+        let matching = groupedSessions.filter { session in
+            term.isEmpty || path.localizedCaseInsensitiveContains(term) || session.cwd.localizedCaseInsensitiveContains(term) ||
+                label?.localizedCaseInsensitiveContains(term) == true ||
+                title(session).localizedCaseInsensitiveContains(term)
+        }
+        guard !matching.isEmpty else { return nil }
+        return SessionDirectory(path: path, sessions: matching.sorted { lhs, rhs in
             lhs.modifiedAt != rhs.modifiedAt ? lhs.modifiedAt > rhs.modifiedAt : lhs.sessionId < rhs.sessionId
-        })
+        }, label: label, projectId: projectId, isUnassignedCodex: isUnassigned)
     }.sorted { lhs, rhs in
         let left = lhs.modifiedAt, right = rhs.modifiedAt
-        return left != right ? left > right : lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
+        return left != right ? left > right : lhs.labelOrPath.localizedStandardCompare(rhs.labelOrPath) == .orderedAscending
     }
+}
+
+private func normalizedProjectPath(_ path: String) -> String {
+    path.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/\\"))
+        .replacingOccurrences(of: "\\", with: "/").lowercased()
+}
+
+private extension SessionDirectory {
+    var labelOrPath: String { label ?? path }
 }
 
 /// 侧栏一次只展开一个目录：优先当前会话所在目录，否则展开最近使用的目录。
 func defaultExpandedDirectory(_ directories: [SessionDirectory], preferred: String?) -> String? {
-    if let preferred, directories.contains(where: { $0.path == preferred }) { return preferred }
-    return directories.first?.path
+    if let preferred, directories.contains(where: { $0.id == preferred }) { return preferred }
+    return directories.first?.id
 }
 
 /// Host 的 runtime 元数据（`RuntimeMetadata`）不携带 agentKind，缺省会被当成 Pi。
@@ -1132,8 +1170,9 @@ final class SessionDirectoryCatalog {
     let sessions: [SessionSummary]
     let titles: [String: String]
     let runtimeBySession: [String: RuntimeSummary]
-    init(sessions: [SessionSummary] = [], titles: [String: String] = [:], runtimeBySession: [String: RuntimeSummary] = [:]) {
-        self.sessions = sessions; self.titles = titles; self.runtimeBySession = runtimeBySession
+    let nativeCodexProjects: [NativeCodexProject]
+    init(sessions: [SessionSummary] = [], titles: [String: String] = [:], runtimeBySession: [String: RuntimeSummary] = [:], nativeCodexProjects: [NativeCodexProject] = []) {
+        self.sessions = sessions; self.titles = titles; self.runtimeBySession = runtimeBySession; self.nativeCodexProjects = nativeCodexProjects
     }
 }
 
@@ -1141,17 +1180,19 @@ actor SessionDirectoryCatalogWorker {
     private let beforeRows: (@Sendable () -> Void)?
     private var previous: SessionDirectoryCatalog?
     private var source: [SessionSummary] = []
+    private var sourceProjects: [NativeCodexProject] = []
     private var overrides: [String: Bool] = [:]
     private var runtimeTitles: [String: String] = [:]
     private var sessionIndex: [String: SessionSummary] = [:]
     init(beforeRows: (@Sendable () -> Void)? = nil) { self.beforeRows = beforeRows }
 
     func resolve(sessions: [SessionSummary], runtimes: [RuntimeSummary], messages: [String: [ChatMessage]],
-                 archived: [String: Bool], kimiCodeSupported: Bool = false) -> SessionDirectoryCatalog {
+                 archived: [String: Bool], kimiCodeSupported: Bool = false,
+                 nativeProjects: [NativeCodexProject] = []) -> SessionDirectoryCatalog {
         let sessions = kimiCodeSupported ? sessions : sessions.filter { !isKimiCode(kind: $0.agentKind, id: $0.sessionId) }
         let bySession = Dictionary(runtimes.compactMap { runtime in runtime.sessionId.map { ($0, runtime) } },
                                    uniquingKeysWith: { first, _ in first })
-        let sameSessions = source == sessions
+        let sameSessions = source == sessions && sourceProjects == nativeProjects
         if !sameSessions { sessionIndex = Dictionary(sessions.map { ($0.sessionId, $0) }, uniquingKeysWith: { first, _ in first }) }
         let titles = bySession.mapValues { runtime in
             sessionTitle(runtime: runtime, session: runtime.sessionId.flatMap { sessionIndex[$0] }, messages: messages[runtime.runtimeId] ?? [])
@@ -1165,8 +1206,8 @@ actor SessionDirectoryCatalogWorker {
         }
         let allTitles = Dictionary(visible.map { ($0.sessionId, titles[$0.sessionId] ?? sessionTitle(runtime: nil, session: $0)) },
                                    uniquingKeysWith: { first, _ in first })
-        source = sessions; overrides = archived; runtimeTitles = titles
-        let result = SessionDirectoryCatalog(sessions: visible, titles: allTitles, runtimeBySession: bySession)
+        source = sessions; sourceProjects = nativeProjects; overrides = archived; runtimeTitles = titles
+        let result = SessionDirectoryCatalog(sessions: visible, titles: allTitles, runtimeBySession: bySession, nativeCodexProjects: nativeProjects)
         previous = result; return result
     }
 }
@@ -1198,10 +1239,10 @@ final class SessionDirectoryProjection {
     init(filter: SessionDirectoryFilter, directories: [SessionDirectory], options: [SessionProviderOption], provider: String) {
         self.filter = filter; self.directories = directories; self.options = options; self.provider = provider
         sessions = directories.flatMap(\.sessions)
-        keys = directories.flatMap { ["directory:" + $0.path] + $0.sessions.map { "session:" + $0.sessionId } }
+        keys = directories.flatMap { ["directory:" + $0.id] + $0.sessions.map { "session:" + $0.sessionId } }
         var activity: [String: Int64] = [:]
         for directory in directories {
-            activity["directory:" + directory.path] = directory.modifiedAt
+            activity["directory:" + directory.id] = directory.modifiedAt
             for session in directory.sessions { activity["session:" + session.sessionId] = session.modifiedAt }
         }
         self.activity = activity
@@ -1222,7 +1263,8 @@ actor SessionDirectoryWorker {
             matchesSessionProvider($0, filter: provider, current: filter.currentProvider)
         } : catalog.sessions
         let directories = sessionDirectories(visible, query: filter.query, kind: filter.kind, archived: filter.archived,
-                                             title: { catalog.titles[$0.sessionId] ?? $0.sessionId })
+                                             title: { catalog.titles[$0.sessionId] ?? $0.sessionId },
+                                             nativeProjects: catalog.nativeCodexProjects)
         let result = SessionDirectoryProjection(filter: filter, directories: directories, options: options, provider: provider)
         previous = result; return result
     }

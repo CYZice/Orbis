@@ -52,6 +52,9 @@ final class HostConnection: ObservableObject {
     @Published private(set) var sessions: [SessionSummary] = [] {
         didSet { markHomeMetadataChanged(); directoryInputRevision &+= 1; directoryMetadataRevision &+= 1; directoryViewRevision &+= 1 }
     }
+    private(set) var nativeCodexProjects: [NativeCodexProject] = [] {
+        didSet { if oldValue != nativeCodexProjects { directoryInputRevision &+= 1; directoryMetadataRevision &+= 1; directoryViewRevision &+= 1 } }
+    }
     /// sessionId → 目录条目。聊天页每条消息、每次流式更新都会查询，不能线性扫描整个目录。
     private var sessionIndex: [String: SessionSummary] = [:]
     private let sessionCatalogWorker = SessionCatalogPreparationWorker()
@@ -400,7 +403,8 @@ final class HostConnection: ObservableObject {
             while !Task.isCancelled {
                 let revision = self.directoryInputRevision, metadata = self.directoryMetadataRevision
                 let catalog = await self.directoryWorker.resolve(sessions: self.sessions, runtimes: self.runtimes,
-                    messages: self.conversations, archived: OperationKinds.archiveOverrides(self.ledger), kimiCodeSupported: self.kimiCodeSupported)
+                    messages: self.conversations, archived: OperationKinds.archiveOverrides(self.ledger), kimiCodeSupported: self.kimiCodeSupported,
+                    nativeProjects: self.nativeCodexProjects)
                 guard !Task.isCancelled else { break }
                 // Transcript chunks may arrive continuously. A serial, older result may advance
                 // the same catalog; newer metadata/archives must fence it out.
@@ -933,7 +937,7 @@ final class HostConnection: ObservableObject {
         if let host = selectedHost { historyWorker.invalidate(host: host) }
         transport.disconnect()
         clearSyncs(); dismissBrowse(); clearActivation()
-        conversations = [:]; messages = []; runtimes = []; sessions = []; sessionIndex = [:]; commands = [:]
+        conversations = [:]; messages = []; runtimes = []; sessions = []; nativeCodexProjects = []; sessionIndex = [:]; commands = [:]
         loadedSessionCacheKey = nil
         homeDirectoryReceived = false; homePresentation = .preparing
         selectedRuntimeId = nil; selectedHostId = nil; activePath = nil; pathRTT = nil; connection = .offline
@@ -1006,7 +1010,7 @@ final class HostConnection: ObservableObject {
         // Reconnect keeps the already prepared catalog visible. Cold hydration is
         // queued ahead of remote updates and never performs disk work on MainActor.
         if loadedSessionCacheKey != sessionCacheKey(pairing) {
-            sessions = []; sessionIndex = [:]
+            sessions = []; nativeCodexProjects = []; sessionIndex = [:]
             _ = queueSessionCatalog([], loadKey: sessionCacheKey(pairing))
         }
         cachedSessionIds = []; cachedIndexLoaded = false; cachedHistoryOptions = []; turnTimings = [:]; timingsBySession = [:]
@@ -3104,6 +3108,7 @@ final class HostConnection: ObservableObject {
             guard !modelCatalogReceived else { return }
             guard let request = sessionListRequest, message["requestId"] as? String == request else { return }
             sessionListRequest = nil
+            nativeCodexProjects = (message["nativeProjects"] as? [[String: Any])?.compactMap(jsonDecode) ?? []
             if let values = message["sessions"] as? [[String: Any]] {
                 let generation = connectionGeneration
                 let decoded = await sessionCatalogWorker.decode(values)

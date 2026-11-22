@@ -177,7 +177,20 @@ struct SessionDrawerView: View, Equatable {
     private var catalog: SessionDirectoryCatalog { store.activeConnection.directoryCatalog }
     private var filterKind: String? { state.kind == kimiCodeKind && !store.activeConnection.kimiCodeSupported ? nil : state.kind }
     private var networkQuery: CatalogQuery {
-        var projection = state; projection.kind = filterKind; return projection.networkQuery
+        var projection = state; projection.kind = filterKind
+        if let directory = catalog.sessions.isEmpty ? nil : catalogDirectoryPath(for: state.expandedPath) {
+            projection.expandedPath = directory
+        } else if state.showAllSessions {
+            projection.expandedPath = nil
+        }
+        return projection.networkQuery
+    }
+    private func catalogDirectoryPath(for id: String?) -> String? {
+        guard let id else { return nil }
+        return catalogDirectory(for: id)?.queryPath
+    }
+    private func catalogDirectory(for id: String) -> SessionDirectory? {
+        catalog.sessions.isEmpty ? nil : directories.first { $0.id == id }
     }
     private var request: SessionDirectoryFilter {
         SessionDirectoryFilter(hostId: store.selectedHostId, catalogRevision: catalog.revision, query: state.query,
@@ -288,7 +301,7 @@ struct SessionDrawerView: View, Equatable {
                     .coordinateSpace(name: "directory-viewport-content")
                     .background(DirectoryViewportObserver(viewport: viewport) {
                         guard let result = store.hostState.catalogQuery else { store.hostState.loadNextCatalogPage(); return }
-                        guard result.query == state.networkQuery else { return }
+                        guard result.query == networkQuery else { return }
                         if searching || state.showAllSessions || !result.previewsComplete {
                             store.hostState.loadNextCatalogPage()
                         }
@@ -302,7 +315,7 @@ struct SessionDrawerView: View, Equatable {
             if !store.pairings.isEmpty { hostSelector }
         }.padding(.horizontal, 16).padding(.vertical, 8)
             .onAppear(perform: resolveExpansion)
-            .onChange(of: directories.map(\.path)) { _, _ in resolveExpansion() }
+            .onChange(of: directories.map(\.id)) { _, _ in resolveExpansion() }
             .onChange(of: store.selectedHostId) { _, _ in state.providerKey = "current"; restartExpansion() }
             .onChange(of: filterKind) { _, _ in restartExpansion() }
             .onChange(of: state.archived) { _, _ in restartExpansion() }
@@ -396,11 +409,11 @@ struct SessionDrawerView: View, Equatable {
         let current = directories
         if state.needsDefaultExpansion {
             guard !current.isEmpty else { return }
-            state.expandedPath = current.first?.path
+            state.expandedPath = current.first?.id
             state.needsDefaultExpansion = false
             state.showAllSessions = false
-        } else if let path = state.expandedPath, !current.contains(where: { $0.path == path }) {
-            state.expandedPath = current.first?.path
+        } else if let path = state.expandedPath, !current.contains(where: { $0.id == path }) {
+            state.expandedPath = current.first?.id
             state.showAllSessions = false
         }
     }
@@ -412,8 +425,8 @@ struct SessionDrawerView: View, Equatable {
         resolveExpansion()
     }
 
-    private func toggle(_ path: String) {
-        state.expandedPath = state.expandedPath == path ? nil : path
+    private func toggle(_ id: String) {
+        state.expandedPath = state.expandedPath == id ? nil : id
         state.showAllSessions = false
         searchFocused = false
     }
@@ -426,26 +439,26 @@ struct SessionDrawerView: View, Equatable {
     }
 
     private func directoryGroup(_ directory: SessionDirectory, selectedIds: Set<String>) -> some View {
-        let expanded = state.expandedPath == directory.path
-        let facts = store.hostState.catalogQuery.flatMap { $0.query == state.networkQuery ? $0 : nil }
-        let total = max(directory.sessions.count, facts?.directoryTotals[directory.path] ?? 0)
+        let expanded = state.expandedPath == directory.id
+        let facts = store.hostState.catalogQuery.flatMap { $0.query == networkQuery ? $0 : nil }
+        let total = max(directory.sessions.count, directory.queryPath.flatMap { facts?.directoryTotals[$0] } ?? 0)
         let hidden = total - directorySessionPreviewLimit
         let visible = expanded && (state.showAllSessions || searching || hidden <= 0) ? directory.sessions : Array(directory.sessions.prefix(directorySessionPreviewLimit))
         return VStack(spacing: 0) {
-            OrbisMotionButton { toggle(directory.path) } label: {
+            OrbisMotionButton { toggle(directory.id) } label: {
                 HStack(spacing: 8) {
                     Image(systemName: expanded ? "folder.fill" : "folder").font(.system(size: 20)).frame(width: 20)
                         .foregroundStyle(expanded ? OrbisPalette(scheme).text : OrbisPalette(scheme).secondary)
-                    Text(directoryTitle(directory.path).isEmpty ? L10n.tr("未记录目录") : directoryTitle(directory.path)).font(.orbisLabel(.semibold)).lineLimit(1)
+                    Text((directory.label ?? directoryTitle(directory.path)).isEmpty ? L10n.tr("未记录目录") : (directory.label ?? directoryTitle(directory.path))).font(.orbisLabel(.semibold)).lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Text("\(total)").font(.orbisCaption()).foregroundStyle(OrbisPalette(scheme).secondary)
                     Image(systemName: "chevron.right").font(.system(size: 16))
                         .rotationEffect(.degrees(expanded ? 90 : 0)).animation(reduceMotion ? nil : .orbisCollapse, value: expanded)
                 }.padding(.horizontal, 8).frame(minHeight: 48).contentShape(Rectangle())
             }.buttonStyle(DirectoryRowStyle())
-                .accessibilityLabel(L10n.tr("{0}目录 {1}，{2} 个会话", expanded ? L10n.tr("收起") : L10n.tr("展开"), directory.path, total))
-                .accessibilityIdentifier("drawer-directory-" + directory.path)
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("directory-viewport-content")) } action: { viewport.record("directory:" + directory.path, frame: $0) }
+                .accessibilityLabel(L10n.tr("{0}目录 {1}，{2} 个会话", expanded ? L10n.tr("收起") : L10n.tr("展开"), directory.label ?? directory.path, total))
+                .accessibilityIdentifier("drawer-directory-" + directory.id)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("directory-viewport-content")) } action: { viewport.record("directory:" + directory.id, frame: $0) }
             OrbisCollapse(expanded: expanded) {
                 VStack(spacing: 0) {
                     ForEach(visible) { session in
