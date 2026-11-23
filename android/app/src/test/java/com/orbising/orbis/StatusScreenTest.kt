@@ -57,6 +57,14 @@ class StatusScreenTest {
         assertEquals("42 ms", connectionLatencyText(RemoteState(e2eReady = true, pathRttMs = 42L)))
     }
 
+    @Test
+    fun `connection phase identifies the blocking stage`() {
+        assertEquals("正在连接中继", connectionPhaseText(RemoteState(connection = RelayConnection.CONNECTING)))
+        assertEquals("正在建立安全通道", connectionPhaseText(RemoteState(connection = RelayConnection.ONLINE)))
+        assertEquals("正在读取电脑目录", connectionPhaseText(RemoteState(connection = RelayConnection.ONLINE, e2eReady = true)))
+        assertEquals("连接已就绪", connectionPhaseText(RemoteState(connection = RelayConnection.ONLINE, e2eReady = true, homeDirectoryReceived = true)))
+    }
+
     /** S28 / SC48：实际协议随 Relay 切换，LAN 不误用备用 Relay 的 QUIC，断线不展示旧值。 */
     @Test
     fun `connection protocol follows the active path and actual adapter`() {

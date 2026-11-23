@@ -2583,6 +2583,7 @@ internal class HostConnection(
                 "pskRoot " + pairing.pskRoot.takeIf { it.isNotBlank() }?.let { L10n.tr("有（{0}…）", it.take(8)) }.orEmpty().ifEmpty { L10n.tr("<缺失>") },
             )
             appendLine(L10n.tr("选中 runtime {0}    传输路径 {1}", current.selectedRuntimeId ?: "-", current.path ?: "-"))
+            appendLine(L10n.tr("连接阶段 {0}    端到端延迟 {1}", connectionPhaseText(current), connectionLatencyText(current)))
             current.error?.let { appendLine(L10n.tr("当前报错 {0}", it)) }
             appendLine(L10n.tr("──── 最近事件（新 → 旧）────"))
             append(relay.recentTraces().asReversed().joinToString("\n"))

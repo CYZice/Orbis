@@ -60,6 +60,8 @@ internal fun DesignSettingsScreen(state: RemoteState, onBack: () -> Unit, root: 
                             style = MaterialTheme.typography.labelMedium, color = color)
                     }
                 }
+                ConnectionMetricRow(L10n.tr("当前阶段"), connectionPhaseText(state))
+                ConnectionMetricRow(L10n.tr("端到端延迟"), connectionLatencyText(state))
                 SettingsRow(L10n.tr("连接协议"), "", "settings-protocol", value = protocolName(state.relayTransportMode),
                     minHeight = 56.dp, onClick = { protocolOpen = true })
                 }
@@ -82,6 +84,16 @@ internal fun DesignSettingsScreen(state: RemoteState, onBack: () -> Unit, root: 
                 AppLocalization.select(choice); languageOpen = false
             }
         }
+    }
+}
+
+@Composable
+private fun ConnectionMetricRow(title: String, value: String) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+        Text(value, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

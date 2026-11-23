@@ -3336,6 +3336,7 @@ internal fun ConnectionStatus(
     // SC53: background reads keep the transport label and capsule geometry stable.
     val label = when {
         failed -> L10n.tr("同步失败")
+        syncing -> L10n.tr("正在加载会话")
         secured -> transportPathLabel(path) ?: L10n.tr("中继")
         connection == RelayConnection.ONLINE -> L10n.tr("正在建立安全通道")
         else -> relayConnectionText(connection)
@@ -3566,6 +3567,17 @@ internal fun relayTransportModeDescription(mode: RelayTransportMode): String = w
 
 internal fun connectionLatencyText(state: RemoteState): String =
     state.pathRttMs?.takeIf { state.e2eReady && it >= 0 }?.let { "$it ms" } ?: L10n.tr("暂不可用")
+
+internal fun connectionPhaseText(state: RemoteState): String = when {
+    state.connection == RelayConnection.OFFLINE -> relayConnectionText(state.connection)
+    state.connection == RelayConnection.CONNECTING -> L10n.tr("正在连接中继")
+    state.connection == RelayConnection.RECONNECTING -> L10n.tr("正在重新连接")
+    state.connection == RelayConnection.ONLINE && !state.e2eReady -> L10n.tr("正在建立安全通道")
+    !state.homeDirectoryReceived -> L10n.tr("正在读取电脑目录")
+    state.sessionListRequests.isNotEmpty() || state.homeRuntimesUpdating -> L10n.tr("正在加载会话和模型")
+    state.e2eReady -> L10n.tr("连接已就绪")
+    else -> relayConnectionText(state.connection)
+}
 
 internal fun connectionStatusText(state: RemoteState): String = when {
     state.e2eReady -> L10n.tr("已连接")
