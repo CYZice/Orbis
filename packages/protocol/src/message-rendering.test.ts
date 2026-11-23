@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ChatMessageSchema, type ChatMessage } from "./index.js";
-import { downgradeMessageForLegacy, normalizeCodexMessage, renderStreamingMarkdown } from "./message-rendering.js";
+import { downgradeMessageForLegacy, normalizeCodexMessage, normalizeWritingMessage, renderStreamingMarkdown } from "./message-rendering.js";
 
 const message = (text: string, role: "assistant" | "user" = "assistant"): ChatMessage => ({
   messageId: "m1", role, timestamp: 1, content: [{ type: "text", text }],
@@ -11,6 +11,13 @@ const source = String.raw`:codex-file-citation{path="C:\Users\25892\Desktop\中�
 const output = ':codex-file-citation{path="/work/final report.md" purpose=output}';
 
 describe("MSG-RENDER-01: shared Codex Markdown projection", () => {
+  it("unwraps writing containers without turning their body into a download", () => {
+    const raw = message('开头\n\n:::writing{variant="standard" id="61738" title="第 9 页讲稿｜未来规划"}\n\n未来，我想往光芯片方向发展。\n\n:::');
+    expect(normalizeWritingMessage(raw).content).toEqual([{ type: "text", text: "开头\n\n## 第 9 页讲稿｜未来规划\n\n未来，我想往光芯片方向发展。" }]);
+    expect(normalizeWritingMessage(message(":::writing\nbody\n:::"))).toEqual(message("body"));
+    expect(normalizeWritingMessage(message(":::writing\nbody\n:::", "user"))).toEqual(message(":::writing\nbody\n:::", "user"));
+  });
+
   it("keeps inline Markdown in the same paragraph and groups duplicate outputs", () => {
     const raw = message(`🙂 Read **${source}** first.\n\n${output}\n${output}`);
     const projected = normalizeCodexMessage(raw, resolve);

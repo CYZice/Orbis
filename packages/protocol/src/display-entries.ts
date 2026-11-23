@@ -365,12 +365,24 @@ function contentBlocks(value: unknown): RemoteContent[] {
       }
       case "image":
       case "input_image":
-        blocks.push({ type: "render", renderKind: "image", text: "图片内容暂不可显示" });
+      case "localImage": {
+        const path = mediaPath(block);
+        const url = mediaUrl(block);
+        const fileName = path?.split(/[\\/]/u).at(-1);
+        blocks.push({ type: "render", renderKind: "image", text: fileName ?? "图片",
+          ...(path === undefined ? {} : { sourcePath: path }),
+          ...(path === undefined && url === undefined ? {} : path === undefined ? { imageUrl: url } : {}) });
         break;
+      }
       case "document":
       case "attachment":
-        blocks.push({ type: "render", renderKind: "document", text: "附件内容暂不可显示" });
+      case "localDocument": {
+        const path = mediaPath(block);
+        blocks.push(path === undefined
+          ? { type: "render", renderKind: "document", text: "附件内容暂不可显示" }
+          : { type: "render", renderKind: "attachment", text: path.split(/[\\/]/u).at(-1) || "附件", sourcePath: path });
         break;
+      }
       case "citation": {
         const url = safeCitationUrl(asString(block["url"]));
         if (url === undefined) blocks.push({ type: "render", renderKind: "citation", text: "引用来源暂不可显示" });
@@ -403,6 +415,24 @@ function truncationFields(block: Record<string, unknown>): { truncated?: true; o
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 const asString = (value: unknown): string | undefined => typeof value === "string" ? value : undefined;
+
+function mediaPath(block: Record<string, unknown>): string | undefined {
+  const path = asString(block["path"]) ?? asString(block["localPath"]);
+  return path !== undefined && path.length > 0 && path.length <= 4096 && !hasControlCharacters(path) ? path : undefined;
+}
+
+function mediaUrl(block: Record<string, unknown>): string | undefined {
+  const url = asString(block["url"]) ?? asString(block["image_url"]);
+  if (url === undefined || url.length === 0 || url.length > 2_000_000 || hasControlCharacters(url)) return undefined;
+  return /^(?:https?:\/\/|data:image\/)/iu.test(url) ? url : undefined;
+}
+
+function hasControlCharacters(value: string): boolean {
+  return [...value].some(character => {
+    const code = character.codePointAt(0)!;
+    return code < 32 || code === 127;
+  });
+}
 const asNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 /** 原生条目时间戳是 ISO 字符串；解不出来就是 0（与客户端既有行为一致，不伪造时间）。 */

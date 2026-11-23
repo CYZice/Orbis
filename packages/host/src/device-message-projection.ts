@@ -87,7 +87,7 @@ const publicBlocks = (value: unknown): unknown => !Array.isArray(value) ? typeof
   const keys = block.type === "text" ? ["type", "text", "truncated", "originalBytes"]
     : block.type === "thinking" ? ["type", "text", "thinking", "truncated", "originalBytes"]
       : block.type === "artifact" ? ["type", "artifact"]
-        : block.type === "render" ? ["type", "renderKind", "text", "file", "purpose"]
+        : block.type === "render" ? ["type", "renderKind", "text", "file", "purpose", "imageUrl"]
         : block.type === "tool_call" || block.type === "toolCall" ? ["type", "id", "name", "toolCallId", "toolName", "summary"] : undefined;
   if (!keys) return [];
   const projected = pick(block, keys);

@@ -1,6 +1,6 @@
 import {
   DISPLAY_PROJECTION_VERSION, LEGACY_DISPLAY_PROJECTION_VERSION, downgradeMessageForLegacy,
-  normalizeCodexMessage, projectDisplayEntries, renderStreamingMarkdown, hasCitationSuffix, hasCodexDirective,
+  normalizeCodexMessage, normalizeWritingMessage, projectDisplayEntries, renderStreamingMarkdown, hasCitationSuffix, hasCodexDirective,
   type ChatMessage, type RemoteSessionEntry, type RuntimeEvent,
 } from "@orbis/protocol";
 import { tmpdir } from "node:os";
@@ -69,7 +69,8 @@ export class DeviceMessageRendering {
           file: { fileName: name, referenceId: file.referenceId } };
     }) });
     const project = (value: ChatMessage, streaming = false): ChatMessage => {
-      let normalized = projectMedia(options.codex ? normalizeCodexMessage(value, resolve, streaming) : value);
+      const source = normalizeWritingMessage(value);
+      let normalized = projectMedia(options.codex ? normalizeCodexMessage(source, resolve, streaming) : source);
       if (options.codex && value.role === "user") {
         const images = new Set(normalized.content.flatMap(block => block.type === "render" && block.renderKind === "file_reference" && block.file
           ? [block.file.fileName.toLowerCase()] : []));
@@ -203,7 +204,7 @@ function projectEntry(entry: RemoteSessionEntry): ChatMessage | undefined {
 }
 function hasSpecialBlock(entry: RemoteSessionEntry): boolean {
   const content = object(entry.data.message)?.content ?? (entry.type === "custom_message" ? entry.data.content : undefined);
-  return Array.isArray(content) && content.some(block => ["image", "input_image", "document", "attachment", "citation", "render"].includes(String(object(block)?.type)));
+  return Array.isArray(content) && content.some(block => ["image", "input_image", "localImage", "document", "attachment", "localDocument", "citation", "render"].includes(String(object(block)?.type)));
 }
 function entryContainsDirective(entry: RemoteSessionEntry): boolean {
   const content = object(entry.data.message)?.content;

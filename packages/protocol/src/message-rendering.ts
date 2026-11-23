@@ -13,6 +13,35 @@ export const hasCodexDirective = (source: string): boolean => source.includes(na
 const maxDirectiveLength = 8192;
 const markdown = new Marked({ gfm: true });
 
+/**
+ * ChatGPT-style writing containers are provider output, not Markdown. Keep their
+ * readable title/body while hiding the transport wrapper from every client.
+ * A writing container has no local file identity, so it remains ordinary text;
+ * downloadable files still use the existing file citation/artifact protocols.
+ */
+const writingContainer = /(^|\n)[ \t]*:::writing(?:\{([^}\r\n]{0,4096})\})?[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*:::[ \t]*(?=\n|$)/gu;
+
+export function normalizeWritingMessage(message: ChatMessage): ChatMessage {
+  if (message.role !== "assistant") return message;
+  let changed = false;
+  const content = message.content.map(block => {
+    if (block.type !== "text") return block;
+    const text = block.text.replace(writingContainer, (_match, prefix: string, attributes: string | undefined, body: string) => {
+      changed = true;
+      const title = writingTitle(attributes);
+      return `${prefix}${title ? `## ${title}\n\n` : ""}${body.trim()}`;
+    });
+    return text === block.text ? block : { ...block, text };
+  });
+  return changed ? { ...message, content } : message;
+}
+
+function writingTitle(attributes: string | undefined): string | undefined {
+  const match = attributes?.match(/(?:^|\s)title=(?:"((?:\\.|[^"\\])*)"|'([^']*)')/u);
+  const value = match?.[1] ?? match?.[2];
+  return value?.replace(/\\([\\"'])/gu, "$1").trim().slice(0, 256) || undefined;
+}
+
 type FileCitation = { path: string; purpose: "source" | "output"; line?: number; endLine?: number };
 type Candidate = { start: number; end: number; citation?: FileCitation; replacement?: string };
 type TextContent = Extract<RemoteContent, { type: "text" }>;
@@ -72,7 +101,7 @@ export function stripMessageFileReferenceTargets(text: string): string {
 
 /** Legacy append events carry a readable preview. The authoritative message carries file actions. */
 export function renderStreamingMarkdown(text: string, resolve?: ResolveFile): { text: string; pending: boolean } {
-  const projected = normalizeCodexMessage({ messageId: "preview", role: "assistant", timestamp: 0, content: [{ type: "text", text }] }, resolve ?? (() => undefined), true);
+  const projected = normalizeWritingMessage(normalizeCodexMessage({ messageId: "preview", role: "assistant", timestamp: 0, content: [{ type: "text", text }] }, resolve ?? (() => undefined), true));
   const value = downgradeMessageForLegacy(projected).content[0];
   return { text: value?.type === "text" ? value.text : "", pending: pendingCandidate(text) !== undefined };
 }
