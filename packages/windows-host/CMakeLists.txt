@@ -13,6 +13,8 @@ endif()
 qt_add_executable(OrbisHost WIN32 src/main.cpp src/HostController.cpp src/HostController.h src/StartupSettings.cpp src/StartupSettings.h src/MotionPreferences.cpp src/MotionPreferences.h src/DiagnosticLogModel.cpp src/DiagnosticLogModel.h src/CredentialStore.cpp src/CredentialStore.h)
 if(WIN32)
   target_sources(OrbisHost PRIVATE src/app.rc)
+  target_compile_definitions(OrbisHost PRIVATE
+    "ORBIS_VERSION_NUMERIC=${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},0")
   target_link_libraries(OrbisHost PRIVATE crypt32)
 endif()
 if(ORBIS_QA_BUILD)

@@ -52,6 +52,10 @@ try {
         if ($Package) {
             $hostVersion = (Select-String -LiteralPath "$repoRoot\packages\windows-host\CMakeLists.txt" -Pattern '^project\(OrbisHost VERSION ([0-9.]+)' | Select-Object -First 1).Matches.Groups[1].Value
             if (!$hostVersion) { throw 'Host version missing from CMakeLists.txt' }
+            $exeVersion = (Get-Item -LiteralPath "$buildDir\OrbisHost.exe").VersionInfo
+            if ($exeVersion.ProductVersion -ne $hostVersion -or $exeVersion.FileVersion -ne $hostVersion) {
+                throw "Windows executable version does not match $hostVersion"
+            }
             # Fresh directory per packaging run: no stale dependency can silently survive an upgrade.
             $releaseRoot = $artifactRoot
             $stage = Join-Path $releaseRoot 'OrbisHost'
