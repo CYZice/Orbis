@@ -35,13 +35,12 @@ export function* codexToolContents(item: Item): Generator<CodexToolContent> {
   if (argumentsValue !== undefined && Object.keys(argumentsValue as object).length > 0) yield { part: "arguments", format: "json", value: argumentsValue };
   if (item.type === "webSearch" || item.type === "imageView") return;
   if (item.type === "dynamicToolCall") {
-    if (Array.isArray(item.contentItems)) yield { part: "result", format: "text", value: item.contentItems.flatMap(raw => {
+    const lines = Array.isArray(item.contentItems) ? item.contentItems.flatMap(raw => {
       if (raw === null || typeof raw !== "object") return [];
       const block = raw as Item;
-      if (block.type === "inputText" && typeof block.text === "string") return [block.text];
-      if (block.type === "inputImage") return ["图片内容暂不可显示"];
-      return [];
-    }).join("\n") };
+      return block.type === "inputText" && typeof block.text === "string" ? [block.text] : [];
+    }) : [];
+    if (lines.length > 0) yield { part: "result", format: "text", value: lines.join("\n") };
     return;
   }
   // aggregatedOutput is the final command output in app-server's full item view.

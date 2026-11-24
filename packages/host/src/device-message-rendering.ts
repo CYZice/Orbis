@@ -1,7 +1,7 @@
 import {
-  DISPLAY_PROJECTION_VERSION, LEGACY_DISPLAY_PROJECTION_VERSION, downgradeMessageForLegacy,
+  DISPLAY_PROJECTION_VERSION, LEGACY_DISPLAY_PROJECTION_VERSION, RemoteContentSchema, downgradeMessageForLegacy,
   normalizeCodexMessage, normalizeWritingMessage, projectDisplayEntries, renderStreamingMarkdown, hasCitationSuffix, hasCodexDirective,
-  type ChatMessage, type RemoteSessionEntry, type RuntimeEvent,
+  type ChatMessage, type RemoteContent, type RemoteSessionEntry, type RuntimeEvent,
 } from "@orbis/protocol";
 import { tmpdir } from "node:os";
 import { codexUserAttachmentEnvelope } from "./codex-user-attachment-envelope.js";
@@ -54,7 +54,7 @@ export class DeviceMessageRendering {
     const event = envelope.event as RuntimeEvent;
     const runtimeId = String(envelope.runtimeId);
     const resolve = (path: string) => options.rich ? this.#files.register(path, options.cwd, deviceId, runtimeId) : undefined;
-    const projectMedia = (value: ChatMessage): ChatMessage => ({ ...value, content: value.content.map(block => {
+    const projectMediaBlock = (block: RemoteContent, role: ChatMessage["role"]): RemoteContent => {
       if (block.type === "tool_call" && block.sourcePath !== undefined) {
         const name = block.sourcePath.split(/[\\/]/u).at(-1) || "image";
         const file = resolve(block.sourcePath);
@@ -65,12 +65,13 @@ export class DeviceMessageRendering {
       const name = block.text.split(/[\\/]/u).at(-1) || "image";
       const file = resolve(block.sourcePath);
       return file === undefined ? { type: "render", renderKind: block.renderKind, text: block.renderKind === "image" ? "图片不可用" : name }
-        : { type: "render", renderKind: "file_reference", ...(value.role === "user" ? {} : { purpose: "output" as const }), text: name,
+        : { type: "render", renderKind: "file_reference", ...(role === "user" ? {} : { purpose: "output" as const }), text: name,
           file: { fileName: name, referenceId: file.referenceId } };
-    }) });
+    };
     const project = (value: ChatMessage, streaming = false): ChatMessage => {
       const source = normalizeWritingMessage(value);
-      let normalized = projectMedia(options.codex ? normalizeCodexMessage(source, resolve, streaming) : source);
+      const projected = options.codex ? normalizeCodexMessage(source, resolve, streaming) : source;
+      let normalized = { ...projected, content: projected.content.map(block => projectMediaBlock(block, projected.role)) };
       if (options.codex && value.role === "user") {
         const images = new Set(normalized.content.flatMap(block => block.type === "render" && block.renderKind === "file_reference" && block.file
           ? [block.file.fileName.toLowerCase()] : []));
@@ -129,6 +130,21 @@ export class DeviceMessageRendering {
         // Rebuild released adapter projections from the same canonical batch where available.
         // The producer still owns ordering, visibility, and compaction anchors.
         const entries = new Map(event.entries?.map(entry => [entry.entryId, entry]));
+        const wireEntries = event.entries?.map(entry => {
+          const native = object(entry.data.message);
+          if (!native || !Array.isArray(native.content) || !native.content.some(hasMediaPath)) return entry;
+          // Wire entries can be persisted independently of display. Rewrite only the media blocks.
+          const role = native.role === "user" ? "user" : "assistant";
+          const content = native.content.map(raw => {
+            if (!hasMediaPath(raw)) return raw;
+            const parsed = RemoteContentSchema.safeParse(raw);
+            if (parsed.success) return projectMediaBlock(parsed.data, role);
+            const block = { ...raw };
+            delete block.sourcePath;
+            return block;
+          });
+          return { ...entry, data: { ...entry.data, message: { ...native, content } } };
+        });
         const batch = display && {
           ...display, projectionVersion: options.rich ? DISPLAY_PROJECTION_VERSION : LEGACY_DISPLAY_PROJECTION_VERSION,
           entries: display.entries.map(row => {
@@ -141,7 +157,8 @@ export class DeviceMessageRendering {
           }),
         };
         const live = event.live && { ...event.live, messages: event.live.messages.map(item => ({ ...item, message: project(item.message, !item.finished) })) };
-        next = { ...event, ...(batch ? { display: batch } : {}), ...(live ? { live } : {}) } as typeof event;
+        next = { ...event, ...(wireEntries ? { entries: wireEntries } : {}), ...(batch ? { display: batch } : {}),
+          ...(live ? { live } : {}) } as typeof event;
         const variants = this.#history.get(event) ?? new Map<string, RuntimeEvent>();
         variants.set(cacheKey, next); this.#history.set(event, variants);
         break;
@@ -204,7 +221,13 @@ function projectEntry(entry: RemoteSessionEntry): ChatMessage | undefined {
 }
 function hasSpecialBlock(entry: RemoteSessionEntry): boolean {
   const content = object(entry.data.message)?.content ?? (entry.type === "custom_message" ? entry.data.content : undefined);
-  return Array.isArray(content) && content.some(block => ["image", "input_image", "localImage", "document", "attachment", "localDocument", "citation", "render"].includes(String(object(block)?.type)));
+  return Array.isArray(content) && content.some(block => hasMediaPath(block) ||
+    ["image", "input_image", "localImage", "document", "attachment", "localDocument", "citation", "render"].includes(String(object(block)?.type)));
+}
+function hasMediaPath(raw: unknown): raw is JsonObject {
+  const block = object(raw);
+  return (block?.type === "tool_call" || block?.type === "render" && ["image", "attachment"].includes(String(block.renderKind)))
+    && typeof block.sourcePath === "string";
 }
 function entryContainsDirective(entry: RemoteSessionEntry): boolean {
   const content = object(entry.data.message)?.content;

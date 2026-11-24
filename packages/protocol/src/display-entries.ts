@@ -1,5 +1,5 @@
 import {
-  RemoteArtifactSchema, RemoteContentSchema, type ChatMessage, type DisplayBatch, type DisplayEntry, type RemoteContent,
+  MessageFileReferenceSchema, RemoteArtifactSchema, RemoteContentSchema, type ChatMessage, type DisplayBatch, type DisplayEntry, type RemoteContent,
   type RemoteSessionEntry,
 } from "./index.js";
 
@@ -356,6 +356,7 @@ function contentBlocks(value: unknown): RemoteContent[] {
           toolCallId: asString(block["toolCallId"]) ?? asString(block["id"]) ?? "",
           toolName: asString(block["toolName"]) ?? asString(block["name"]) ?? "",
           ...(block["summary"] === undefined ? { arguments: block["arguments"] } : { summary: block["summary"] as Extract<RemoteContent, { type: "tool_call" }>["summary"] }),
+          ...toolFileFields(block),
         });
         break;
       case "render": {
@@ -415,6 +416,12 @@ function truncationFields(block: Record<string, unknown>): { truncated?: true; o
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 const asString = (value: unknown): string | undefined => typeof value === "string" ? value : undefined;
+
+function toolFileFields(block: Record<string, unknown>): { sourcePath?: string; file?: Extract<RemoteContent, { type: "tool_call" }>["file"] } {
+  const sourcePath = mediaPath({ path: block.sourcePath });
+  const file = MessageFileReferenceSchema.safeParse(block.file);
+  return { ...(sourcePath === undefined ? {} : { sourcePath }), ...(file.success ? { file: file.data } : {}) };
+}
 
 function mediaPath(block: Record<string, unknown>): string | undefined {
   const path = asString(block["path"]) ?? asString(block["localPath"]);

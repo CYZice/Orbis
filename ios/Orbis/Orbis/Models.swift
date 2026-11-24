@@ -469,16 +469,25 @@ struct ChatContent: Codable, Hashable {
     var arguments: RemoteJSONValue? = nil
     var renderKind: String? = nil
     var file: MessageFileReference? = nil
+    var imageUrl: String? = nil
 
     var renderLabel: String {
         guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return L10n.tr("内容暂不可显示") }
         return renderKind == "file_reference" ? text : L10n.tr(text)
     }
-    var fileAction: String? { type == "render" && renderKind == "file_reference" ? messageFileReferenceId(file?.referenceId) : nil }
+    var fileAction: String? {
+        guard ["tool_call", "toolCall"].contains(type) || (type == "render" && renderKind == "file_reference") else { return nil }
+        return messageFileReferenceId(file?.referenceId)
+    }
+    var remoteImageURL: URL? {
+        guard type == "render", renderKind == "image", let imageUrl, let url = URL(string: imageUrl),
+              ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else { return nil }
+        return url
+    }
     var visibleText: String? { type == "render" ? renderLabel : text.map(copyableMessageText) }
 
     enum CodingKeys: String, CodingKey {
-        case type, text, toolName, artifact, summary, toolCallId, truncated, originalBytes, arguments, renderKind, file
+        case type, text, toolName, artifact, summary, toolCallId, truncated, originalBytes, arguments, renderKind, file, imageUrl
     }
 }
 
@@ -490,7 +499,9 @@ extension ChatContent {
         toolName = try values.decodeIfPresent(String.self, forKey: .toolName)
         artifact = try values.decodeIfPresent(RemoteArtifact.self, forKey: .artifact)
         renderKind = try values.decodeIfPresent(String.self, forKey: .renderKind)
-        file = renderKind == "file_reference" ? (try? values.decodeIfPresent(MessageFileReference.self, forKey: .file)) : nil
+        file = (type == "render" && renderKind == "file_reference") || ["tool_call", "toolCall"].contains(type)
+            ? (try? values.decodeIfPresent(MessageFileReference.self, forKey: .file)) : nil
+        imageUrl = type == "render" && renderKind == "image" ? (try? values.decodeIfPresent(String.self, forKey: .imageUrl)) : nil
         summary = try values.decodeIfPresent(ToolSummary.self, forKey: .summary)
         toolCallId = try values.decodeIfPresent(String.self, forKey: .toolCallId)
         truncated = try values.decodeIfPresent(Bool.self, forKey: .truncated)

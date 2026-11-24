@@ -5,13 +5,13 @@ import { testDirectorySync } from "../../../scripts/test-fixtures/temp-directory
  * CodexRuntime 的映射测试：不跑真 app-server，用一个可脚本的假客户端，
  * 验证 thread 列表 → 目录条目、turn/item 事件流 → runtime 事件、审批闭环。
  */
-import { writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { SESSION_SYNC_PAGE_BYTES, SESSION_SYNC_WRAPPER_BYTES, RuntimeEventSchema, type AgentExecutionState, type AgentSessionSummary, type RuntimeEvent, type SessionSyncRequest } from "@orbis/protocol";
+import { SESSION_SYNC_PAGE_BYTES, SESSION_SYNC_WRAPPER_BYTES, RuntimeEventSchema, type AgentExecutionState, type AgentSessionSummary, type ChatMessage, type RuntimeEvent, type SessionSyncRequest } from "@orbis/protocol";
 
 import { AgentStateFacts } from "./agent-state-facts.js";
 import { AgentStateRegistry } from "./agent-state-registry.js";
@@ -255,6 +255,54 @@ it("preserves Codex user media, generated images, and public reasoning summaries
   expect(syncHistory(replay)?.display?.entries.map(e => e.message?.content)).toEqual(live);
   expect(replay.runtime.generatedImagePath(runtimeId, "generated")).toBe(path);
   expect(JSON.stringify(syncHistory(replay))).not.toMatch(/result\.png/);
+});
+
+it("replays native image tools and generated results without putting image bytes in messages", async () => {
+  const h = makeHarness(); await activate(h);
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aR8sAAAAASUVORK5CYII=";
+  const route = { threadId: "th-1", turnId: "native-images" };
+  const imageView = { id: "view", type: "imageView", path: "screenshots/example.png" };
+  const dynamic = { id: "dynamic", type: "dynamicToolCall", tool: "capture", success: true, contentItems: [
+    { type: "inputText", text: "Private result text" },
+    { type: "inputImage", imageUrl: `data:image/png;base64,${png}` },
+    { type: "inputImage", imageUrl: "https://example.test/capture.png" },
+    { type: "inputImage", imageUrl: "file:///private/notes.txt" },
+  ] };
+  const generated = { id: "generated-result", type: "image_generation", status: "completed", result: png };
+  const remote = { id: "generated-url", type: "imageGeneration", status: "completed", result: "https://example.test/result.png" };
+  const items = [imageView, dynamic, generated, remote];
+  const replay = makeHarness({ initialTurns: [{ id: route.turnId, status: "completed", items }] });
+  try {
+    h.notify("item/started", { ...route, item: imageView });
+    expect(h.events.find(e => e.type === "message.started")).toMatchObject({ message: { content: [
+      { type: "tool_call", sourcePath: imageView.path },
+    ] } });
+    for (const item of items) h.notify("item/completed", { ...route, item });
+    const live = h.events.filter(e => e.type === "message.finished").map(e => e.message);
+    const media = (messages: readonly ChatMessage[]) => messages.map(message => message.content.map(block => block.type === "tool_call"
+      ? { type: block.type, sourcePath: block.sourcePath }
+      : block.type === "render" ? { ...block, ...(block.sourcePath ? { sourcePath: "cached" } : {}) } : block));
+    expect(media(live)).toEqual([
+      [{ type: "tool_call", sourcePath: imageView.path }],
+      [{ type: "tool_call", sourcePath: undefined }, { type: "render", renderKind: "image", text: "image.png", sourcePath: "cached" },
+        { type: "render", renderKind: "image", text: "图片", imageUrl: "https://example.test/capture.png" },
+        { type: "render", renderKind: "image", text: "图片不可用" }],
+      [{ type: "render", renderKind: "codex_generated_image", text: "生成图片暂不可显示" }],
+      [{ type: "render", renderKind: "image", text: "生成图片", imageUrl: "https://example.test/result.png" }],
+    ]);
+    expect(JSON.stringify(live)).not.toContain(png);
+    expect(JSON.stringify(live)).not.toContain("Private result text");
+    const generatedPath = h.runtime.generatedImagePath(h.runtime.runtimeIdFor(route.threadId), generated.id)!;
+    expect(live[1]?.content[1]).toMatchObject({ sourcePath: generatedPath });
+    expect(readFileSync(generatedPath)).toEqual(Buffer.from(png, "base64"));
+    await activate(replay);
+    const history = syncHistory(replay)?.display?.entries.flatMap(row => row.message?.role === "assistant" ? [row.message] : []) ?? [];
+    expect(media(history)).toEqual(media(live));
+    const replayPath = replay.runtime.generatedImagePath(replay.runtime.runtimeIdFor(route.threadId), generated.id)!;
+    expect(readFileSync(replayPath)).toEqual(Buffer.from(png, "base64"));
+  } finally {
+    await Promise.all([h.runtime.stop(), replay.runtime.stop()]);
+  }
 });
 
 it("keeps remote and data URL user images as renderable image inputs", async () => {

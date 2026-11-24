@@ -89,6 +89,7 @@ const MIME_TYPES: Record<string, string> = {
   ".pdf": "application/pdf",
   ".png": "image/png",
   ".txt": "text/plain",
+  ".webp": "image/webp",
   ".zip": "application/zip",
 };
 

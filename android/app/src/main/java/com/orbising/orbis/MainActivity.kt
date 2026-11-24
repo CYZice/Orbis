@@ -2699,6 +2699,7 @@ internal fun ChatScreen(
                             downloads = rowResources?.rows?.get(item.key)?.downloads.orEmpty(),
                             downloadArtifact = { artifact -> if (model.downloadArtifact(artifact)) chatFlight.launch() },
                             downloadFile = { path -> if (model.downloadFile(path)) chatFlight.launch() },
+                            previewImage = if (state.e2eReady && !kimiCode) ({ path -> model.downloadFile(path, previewOnly = true) }) else null,
                             fileChanges = {
                                 if (!kimiCode) {
                                     val changes = state.turnChanges[runtimeId]
@@ -4001,6 +4002,7 @@ internal fun AssistantTurnCard(
     copyMessages: List<ChatMessage> = messages,
     cardId: String = messages.first().messageId,
     onFork: (() -> Unit)? = null,
+    previewImage: ((String) -> Unit)? = null,
     fileChanges: @Composable () -> Unit = {},
 ) {
     val motionParts = remember(messages) { messages.flatMap { message -> message.content.mapIndexed { index, block ->
@@ -4030,12 +4032,13 @@ internal fun AssistantTurnCard(
                                     downloads = downloads,
                                     downloadArtifact = downloadArtifact,
                                     downloadFile = downloadFile,
+                                    previewImage = previewImage,
                                 )
                             }
                         }
                         is AssistantCardItem.ToolGroup -> key(runtimeId, "tools:$index:${item.calls.first().key}") {
                             ChatToolGroup(runtimeId, item.calls, toolActivities, toolResults,
-                                downloads, downloadArtifact, downloadFile)
+                                downloads, downloadArtifact, downloadFile, previewImage)
                         }
                     }
                 }
@@ -4065,6 +4068,7 @@ private fun ChatToolGroup(
     downloads: Map<String, ArtifactDownload>,
     downloadArtifact: (RemoteArtifact) -> Unit,
     downloadFile: (String) -> Unit,
+    previewImage: ((String) -> Unit)? = null,
 ) {
     val id = calls.first().key
     var expanded by rememberSaveable(id) { mutableStateOf(false) }
@@ -4078,7 +4082,7 @@ private fun ChatToolGroup(
     @Composable fun callView(call: ChatCardTool) {
         androidx.compose.runtime.key(call.key) {
             MessageBlocks(runtimeId, call.message.copy(content = listOf(call.block)), activities, results,
-                downloads, downloadArtifact, downloadFile)
+                downloads, downloadArtifact, downloadFile, previewImage)
         }
     }
     if (calls.size == 1) { callView(calls.first()); return }
@@ -4107,6 +4111,7 @@ private fun AssistantTurnMessage(
     downloads: Map<String, ArtifactDownload>,
     downloadArtifact: (RemoteArtifact) -> Unit,
     downloadFile: (String) -> Unit,
+    previewImage: ((String) -> Unit)? = null,
 ) {
     if (message.isError == true) {
         NeumorphSurface(
@@ -4119,11 +4124,11 @@ private fun AssistantTurnMessage(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(L10n.tr("回复异常"), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelMedium)
-                MessageBlocks(runtimeId, message, toolActivities, toolResults, downloads, downloadArtifact, downloadFile)
+                MessageBlocks(runtimeId, message, toolActivities, toolResults, downloads, downloadArtifact, downloadFile, previewImage)
             }
         }
     } else {
-        MessageBlocks(runtimeId, message, toolActivities, toolResults, downloads, downloadArtifact, downloadFile)
+        MessageBlocks(runtimeId, message, toolActivities, toolResults, downloads, downloadArtifact, downloadFile, previewImage)
     }
 }
 
@@ -4189,9 +4194,10 @@ private fun MessageBlocks(
                         result = result,
                         live = live,
                         summary = summary,
-                        imageFile = block.file,
+                        imageFile = block.file?.takeIf { block.messageFileAction() != null },
                         imageDownloads = downloads,
                         downloadFile = downloadFile,
+                        previewImage = previewImage,
                         canRead = LocalToolContentAvailable.current,
                         openDetail = { part -> summary?.let { openDetail(runtimeId, it, part) } },
                     )
@@ -4263,13 +4269,14 @@ private fun ImageReferenceCard(
         } else {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(OrbisSymbols.AttachFile, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Icon(if (onPreview == null) OrbisSymbols.Download else OrbisSymbols.AttachFile,
+                    contentDescription = if (onPreview == null) L10n.tr("下载原图") else null, tint = MaterialTheme.colorScheme.primary)
                 Text(block.file?.fileName ?: block.messageRenderLabel(), Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (download?.status in setOf("queued", "downloading")) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
             }
         }
     }
-    if (onPreview != null && ready) {
+    if (onPreview != null) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             TextButton(onClick = onDownload) { Text(L10n.tr("下载原图")) }
         }
@@ -4372,17 +4379,22 @@ private fun CollapsedTool(
     imageFile: MessageFileReference? = null,
     imageDownloads: Map<String, ArtifactDownload> = emptyMap(),
     downloadFile: (String) -> Unit = {},
+    previewImage: ((String) -> Unit)? = null,
     canRead: Boolean = false,
     openDetail: (String) -> Unit = {},
 ) {
+    val reference = imageFile?.referenceId
+    val imageContent: (@Composable () -> Unit)? = if (imageFile == null || reference == null) null else {
+        {
+            val block = RemoteContent(type = "render", renderKind = "file_reference", text = imageFile.fileName, file = imageFile)
+            val download = imageDownloads.values.firstOrNull { it.sourcePath == reference && it.previewOnly == (previewImage != null) }
+                ?: imageDownloads.values.firstOrNull { it.sourcePath == reference }
+            ImageReferenceCard(block, download, onDownload = { downloadFile(reference) },
+                onPreview = previewImage?.let { preview -> { preview(reference) } }, autoPreview = previewImage != null)
+        }
+    }
     if (summary != null) {
-        ToolSummaryDisclosure(summary, canRead, openDetail, expandedContent = if (imageFile == null) null else {
-            {
-                val previewBlock = RemoteContent(type = "render", renderKind = "image", text = imageFile.fileName, file = imageFile)
-                ImageReferenceCard(previewBlock, imageDownloads.values.firstOrNull { it.sourcePath == imageFile.referenceId },
-                    onDownload = { downloadFile(imageFile.referenceId.orEmpty()) })
-            }
-        })
+        ToolSummaryDisclosure(summary, canRead, openDetail, expandedContent = imageContent)
         return
     }
     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -4403,13 +4415,7 @@ private fun CollapsedTool(
         onClick = { expanded = !expanded },
         showStatus = status != L10n.tr("已完成"),
         tint = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-        expandedContent = if (imageFile == null) null else {
-            {
-                val previewBlock = RemoteContent(type = "render", renderKind = "image", text = imageFile.fileName, file = imageFile)
-                ImageReferenceCard(previewBlock, imageDownloads.values.firstOrNull { it.sourcePath == imageFile.referenceId },
-                    onDownload = { downloadFile(imageFile.referenceId.orEmpty()) })
-            }
-        },
+        expandedContent = imageContent,
     )
 }
 

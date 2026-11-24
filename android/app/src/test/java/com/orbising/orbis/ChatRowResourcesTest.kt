@@ -5,6 +5,21 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ChatRowResourcesTest {
+    @Test fun `tool and render file references observe preview and saved download tasks`() = runBlocking {
+        val id = "orbis-message-file:" + "a".repeat(64)
+        val file = MessageFileReference("image.png", id)
+        val first = ChatMessage("u", "user", listOf(RemoteContent("render", "image.png", renderKind = "file_reference", file = file)), 1)
+        val answer = ChatMessage("a", "assistant", listOf(RemoteContent("tool_call", toolCallId = "view", toolName = "查看图片", file = file)), 2)
+        val identity = ChatPresentationIdentity("h", "r", "s", 0)
+        val projection = ChatPresentationWorker().resolve(ChatPresentationRequest(identity, listOf(first, answer), emptyMap(), emptyMap(), emptyMap()))
+        val preview = ArtifactDownload("preview", "host", displayName = "image.png", sourcePath = id, previewOnly = true, status = "completed", savedLocation = "preview.png")
+        val download = ArtifactDownload("saved", "host", displayName = "image.png", sourcePath = id, status = "completed", savedLocation = "saved.png")
+        val worker = ChatRowResourcesWorker()
+        val resources = worker.resolve(ChatResourcesRequest(projection, mapOf("preview" to preview, "saved" to download), emptySet(), emptySet(), true))
+        assertEquals(id, answer.content.single().messageFileAction())
+        for (row in projection.items) assertEquals(setOf(preview, download), resources.rows.getValue(row.key).downloads.values.toSet())
+    }
+
     // Two match routes preserve first-task precedence; unrelated progress must reuse row objects.
     @Test fun `download progress and streaming invalidate only their owning rows`() = runBlocking {
         val artifact = RemoteArtifact("file", "file.txt", "text/plain", 100, path = "/file")

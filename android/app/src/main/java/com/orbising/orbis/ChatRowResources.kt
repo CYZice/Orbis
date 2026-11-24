@@ -36,6 +36,8 @@ internal class ChatRowResourcesWorker {
     private var downloads: Map<String, ArtifactDownload>? = null
     private var byArtifact: Map<String, Indexed> = emptyMap()
     private var byPath: Map<String, Indexed> = emptyMap()
+    private var previewsByPath: Map<String, ArtifactDownload> = emptyMap()
+    private var downloadsByPath: Map<String, ArtifactDownload> = emptyMap()
     private var active = 0
     private var previous: ChatResourcesSnapshot? = null
 
@@ -43,12 +45,18 @@ internal class ChatRowResourcesWorker {
         if (downloads !== input.downloads) {
             val artifacts = mutableMapOf<String, Indexed>()
             val paths = mutableMapOf<String, Indexed>()
+            val previews = mutableMapOf<String, ArtifactDownload>()
+            val files = mutableMapOf<String, ArtifactDownload>()
             input.downloads.values.forEachIndexed { index, task ->
                 val value = Indexed(index, task)
                 task.sourceArtifactId?.let { artifacts.putIfAbsent(it, value) }
-                task.sourcePath?.let { paths.putIfAbsent(it, value) }
+                task.sourcePath?.let {
+                    paths.putIfAbsent(it, value)
+                    (if (task.previewOnly) previews else files).putIfAbsent(it, task)
+                }
             }
             byArtifact = artifacts; byPath = paths; downloads = input.downloads
+            previewsByPath = previews; downloadsByPath = files
             active = input.downloads.values.count { it.status == "queued" || it.status == "downloading" }
         }
         val old = previous?.takeIf { it.identity == input.projection?.identity }
@@ -58,7 +66,11 @@ internal class ChatRowResourcesWorker {
                 val byFile = artifact.path?.let(byPath::get)
                 val match = if (byId == null) byFile else if (byFile == null || byId.position <= byFile.position) byId else byFile
                 match?.task?.let { artifactDownloadKey(artifact) to it }
-            }.toMap()
+            }.toMap().toMutableMap()
+            for (reference in input.projection?.messageFilesByRow?.get(key).orEmpty()) {
+                previewsByPath[reference]?.let { tasks["preview:$reference"] = it }
+                downloadsByPath[reference]?.let { tasks[reference] = it }
+            }
             val live = if (input.ready) ids.filterTo(linkedSetOf()) { it in input.streaming && it !in input.finished } else emptySet()
             val before = old?.rows?.get(key)
             key to if (before != null && before.downloads == tasks && before.streaming == live) before else ChatRowResources(tasks, live)

@@ -35,7 +35,9 @@ Status: accepted（2026-10-22：Pi 媒体引用及 Codex 工具结果预处理�
 
 图片在统一模型中采用确定性引用，由生产者在 canonical 和实时路径统一投影。引用包含 mimeType、byteLength、可选尺寸和可核验的本机路径或 artifact；无法定位时保留明确占位。
 
-Pi 的字符串内联预算初值为 8KB；Codex 工具结果先提取媒体引用，DSH 继续使用文本占位并保留可用路径。手机按文本与 artifact 现有入口展示，图片查看另按下载能力演进。
+Pi 的字符串内联预算初值为 8KB；DSH 继续使用文本占位并保留可用路径。
+
+Codex 的 `imageView`、动态工具图片和生成结果使用同一套实时／历史投影。路径由 Host 换成按设备授权的文件引用；工具结果和生成结果里的内联图片先写入有界 Host 缓存，重放时可从 Codex 原始结果重建。图片字节不进入消息、工具摘要或会话同步，手机通过现有 `file.download` 获取预览与原图。只有 HTTP(S) URL 的图片由手机直接显示，不注册为本机文件。
 
 参考：[`sessionEntryData`](../../packages/pi-extension/src/pi-adapter.ts)。
 

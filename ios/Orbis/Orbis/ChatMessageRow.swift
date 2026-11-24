@@ -255,14 +255,14 @@ private struct AttachmentThumbnail: View {
         }.frame(width: 36, height: 36).clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .task(id: task.localPath) { image = await Self.thumbnail(task) }
     }
-    static func thumbnail(_ task: FileTransfer) async -> UIImage? {
+    static func thumbnail(_ task: FileTransfer, maxPixels: Int = 120) async -> UIImage? {
         guard let path = task.localPath, let type = UTType(filenameExtension: (task.name as NSString).pathExtension),
               type.conforms(to: .image) else { return nil }
         return await Task.detached(priority: .utility) {
             guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
                   let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                     kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceThumbnailMaxPixelSize: 120] as CFDictionary) else { return nil }
+                    kCGImageSourceThumbnailMaxPixelSize: maxPixels] as CFDictionary) else { return nil }
             return UIImage(cgImage: cgImage)
         }.value
     }
@@ -353,6 +353,44 @@ private struct ChatToolGroup: View {
     }
 }
 
+@MainActor
+private struct MessageFileCard: View {
+    @ObservedObject var transfers: FileTransfers
+    @Environment(\.downloadFlight) private var downloadFlight
+    let reference: String
+    let fileName: String
+    @State private var preview: UIImage?
+
+    private var transfer: FileTransfer? {
+        transfers.tasks.first { $0.hostKey == transfers.hostKey && $0.direction == "download" && $0.sourcePath == reference }
+    }
+    var body: some View {
+        let task = transfer
+        let busy = ["queued", "downloading", "verifying"].contains(task?.status ?? "")
+        VStack(alignment: .leading, spacing: 6) {
+            if let preview {
+                Image(uiImage: preview).resizable().scaledToFit().frame(maxHeight: 320)
+                    .accessibilityLabel(fileName).accessibilityIdentifier("message-image-preview")
+            }
+            OrbisMotionButton {
+                if transfers.download(path: reference, displayName: fileName) { downloadFlight?.launch() }
+            } label: {
+                HStack(spacing: 8) {
+                    OrbisActionSymbol(systemName: "arrow.down.doc")
+                    FileNameText(name: fileName)
+                    if busy { ProgressView().controlSize(.small) }
+                }.font(.orbisLabel()).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).padding(.horizontal, 12)
+            }.buttonStyle(NeuButtonStyle()).disabled(busy).accessibilityIdentifier("message-file-reference")
+        }
+        .task(id: task?.localPath) {
+            let image: UIImage?
+            if let task, task.status == "completed" { image = await AttachmentThumbnail.thumbnail(task, maxPixels: 1200) }
+            else { image = nil }
+            if !Task.isCancelled { preview = image }
+        }
+    }
+}
+
 private struct MessageContentView: View {
     @Environment(\.orbisFileActions) private var fileActions
     @Environment(\.downloadFlight) private var downloadFlight
@@ -394,16 +432,27 @@ private struct MessageContentView: View {
                             }
                         }
                     }
+                    if let reference = content.fileAction, let fileActions {
+                        MessageFileCard(transfers: fileActions, reference: reference, fileName: content.file?.fileName ?? content.renderLabel)
+                    }
                 case "render":
-                    if let reference = content.fileAction {
-                        OrbisMotionButton {
-                            if fileActions?.download(path: reference, displayName: content.file?.fileName) == true { downloadFlight?.launch() }
-                        } label: {
-                            HStack(spacing: 8) {
-                                OrbisActionSymbol(systemName: "arrow.down.doc")
-                                FileNameText(name: content.renderLabel)
-                            }.font(.orbisLabel()).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).padding(.horizontal, 12)
-                        }.buttonStyle(NeuButtonStyle()).accessibilityIdentifier("message-file-reference")
+                    if let reference = content.fileAction, let fileActions {
+                        MessageFileCard(transfers: fileActions, reference: reference, fileName: content.file?.fileName ?? content.renderLabel)
+                    } else if let url = content.remoteImageURL {
+                        AsyncImage(url: url) { phase in
+                            if let image = phase.image {
+                                image.resizable().scaledToFit().frame(maxHeight: 320).accessibilityLabel(content.renderLabel)
+                            } else if phase.error != nil {
+                                Text(content.renderLabel).font(.orbisLabel())
+                            } else {
+                                ProgressView().accessibilityLabel(content.renderLabel)
+                            }
+                        }.accessibilityIdentifier("message-inline-image")
+                    } else if let inline = content.imageUrl, inline.hasPrefix("data:image/"),
+                              let comma = inline.firstIndex(of: ","), inline[..<comma].hasSuffix(";base64"),
+                              let data = Data(base64Encoded: String(inline[inline.index(after: comma)...])), let image = UIImage(data: data) {
+                        Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 320)
+                            .accessibilityLabel(content.renderLabel).accessibilityIdentifier("message-inline-image")
                     } else {
                         Text(content.renderLabel).font(.orbisLabel()).foregroundStyle(OrbisPalette(scheme).secondary)
                             .textSelection(.enabled).accessibilityIdentifier("message-content-placeholder")

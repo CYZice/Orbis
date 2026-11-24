@@ -14,7 +14,7 @@ internal fun RemoteContent.messageRenderLabel(): String = text?.takeIf(String::i
     ?: L10n.tr("内容暂不可显示")
 
 internal fun RemoteContent.messageFileAction(): String? =
-    if (type == "render" && renderKind == "file_reference") messageFileReferenceId(file?.referenceId) else null
+    if (type == "tool_call" || type == "render" && renderKind == "file_reference") messageFileReferenceId(file?.referenceId) else null
 
 internal fun RemoteContent.replyCopyText(): String? = when (type) {
     "text" -> text?.let(::copyableMessageText)?.takeIf(String::isNotBlank)

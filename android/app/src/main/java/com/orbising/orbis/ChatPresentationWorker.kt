@@ -48,13 +48,15 @@ internal class ChatPresentationProjection(
         is ChatListItem.UserMessage -> listOf(item.message.messageId)
         is ChatListItem.AssistantTurn -> item.messages.map(ChatMessage::messageId)
     } }
-    val artifactsByRow = items.associate { item ->
+    private val blocksByRow = items.associate { item ->
         val messages = when (item) {
             is ChatListItem.UserMessage -> listOf(item.message)
             is ChatListItem.AssistantTurn -> item.messages
         }
-        item.key to messages.flatMap { it.content }.mapNotNull(RemoteContent::artifact)
+        item.key to messages.flatMap { it.content }
     }
+    val artifactsByRow = blocksByRow.mapValues { (_, blocks) -> blocks.mapNotNull(RemoteContent::artifact) }
+    val messageFilesByRow = blocksByRow.mapValues { (_, blocks) -> blocks.mapNotNull(RemoteContent::messageFileAction).distinct() }
     val byKey = items.associateBy(ChatListItem::key)
     // Keep source-message lookup for actions and add identities for split card anchors.
     val indexByMessage = buildMap {

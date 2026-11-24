@@ -86,6 +86,36 @@ it("projects an imageView tool path into its expandable tool preview reference",
   } }] } });
 });
 
+it("keeps the same opaque references in rich history, live checkpoints and entry details", () => {
+  const files = new MessageFileReferences();
+  const engine = new DeviceMessageRendering(files);
+  const sourcePath = join(cwd, "shot.png");
+  const message: ChatMessage = { ...assistant(), content: [
+    { type: "tool_call", toolCallId: "view", toolName: "查看图片", sourcePath },
+    { type: "render", renderKind: "image", text: "shot.png", sourcePath },
+  ] };
+  const entry = { entryId: "m1", parentId: null, type: "message", timestamp: "2026-11-19T00:00:00Z", data: { message } };
+  const history = selectSessionSyncSnapshot([entry], "session", "m1", { sessionId: "session", syncId: "s", range: "preview" });
+  const project = (event: RuntimeEvent) => (engine.project("device", { type: "runtime.event", runtimeId: "r", event },
+    { rich: true, codex: true, cwd }) as { event: RuntimeEvent }).event;
+  const referenceId = files.register(sourcePath, cwd, "device", "r")?.referenceId;
+  expect(referenceId).toMatch(/^orbis-message-file:/);
+  const content = [
+    { type: "tool_call", file: { fileName: "shot.png", referenceId } },
+    { type: "render", renderKind: "file_reference", purpose: "output", file: { fileName: "shot.png", referenceId } },
+  ];
+  const projected = project(history);
+  expect(projected).toMatchObject({ entries: [{ data: { message: { content } } }], display: { entries: [{ message: { content } }] } });
+  expect(JSON.stringify(projected)).not.toContain("sourcePath");
+  const patch: RuntimeEvent = { type: "session.patch", sessionId: "session", source: { epoch: "media", seq: 2, ready: true },
+    baseSeq: 1, seq: 2, checkpointId: "media:2", head: { leafId: "m1" }, headCompleteness: "complete",
+    live: { complete: true, tools: [], turn: null, messages: [{ message, finished: false, contentComplete: true }] } };
+  expect(project(patch)).toMatchObject({ live: { messages: [{ message: { content } }] } });
+  expect(project({ type: "session.entry.result", requestId: "entry", entryId: "m1", entry }))
+    .toMatchObject({ entry: { data: { message: { content } } } });
+  expect(message.content[0]).toMatchObject({ sourcePath });
+});
+
 it("projects media references on streaming messages and strips paths for legacy clients", () => {
   const event = { type: "message.started" as const, message: {
     messageId: "stream-image", role: "user" as const, timestamp: 1,

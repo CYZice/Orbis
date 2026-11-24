@@ -15,6 +15,24 @@ import org.junit.Test
 class DownloadFileBrowserInstrumentedTest {
     @get:Rule val compose = createComposeRule()
 
+    @Test fun codexImageCardsDownloadTheHostReference() {
+        val inlineId = "orbis-message-file:" + "a".repeat(64)
+        val toolId = "orbis-message-file:" + "b".repeat(64)
+        val downloads = mutableListOf<String>()
+        val images = ChatMessage("images", "assistant", listOf(
+            RemoteContent("tool_call", toolCallId = "view", toolName = "View image", file = MessageFileReference("view.png", toolId)),
+            RemoteContent("render", "generated.png", renderKind = "file_reference", file = MessageFileReference("generated.png", inlineId)),
+        ), 1)
+        compose.setContent { OrbisTheme {
+            AssistantTurnCard(runtimeId = "codex:thread", messages = listOf(images), turnTiming = null, nowMs = 0,
+                toolActivities = emptyMap(), toolResults = emptyMap(), downloads = emptyMap(), downloadArtifact = {}, downloadFile = { downloads += it })
+        } }
+        compose.onNodeWithText("generated.png").performClick()
+        compose.onNodeWithText("View image").performClick()
+        compose.onNodeWithText("view.png").performClick()
+        compose.runOnIdle { assertEquals(listOf(inlineId, toolId), downloads) }
+    }
+
     @Test fun downloadPageBrowsesDrivesFoldersAndDownloadsSelectedFileWithoutTyping() {
         val state = mutableStateOf(RemoteState(connection = RelayConnection.ONLINE, e2eReady = true))
         val downloads = mutableListOf<String>()

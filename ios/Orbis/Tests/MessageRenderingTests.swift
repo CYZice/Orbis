@@ -16,6 +16,18 @@ struct MessageRenderingTests {
         #expect(messageFileReferenceId(target + "\n") == nil)
     }
 
+    @Test func codexToolImageAndInlineImageDecodeIntoTheirOwnActions() throws {
+        let target = "orbis-message-file:" + String(repeating: "a", count: 64)
+        let blocks: [[String: Any]] = [
+            ["type": "tool_call", "toolCallId": "view", "file": ["fileName": "shot.png", "referenceId": target]],
+            ["type": "render", "renderKind": "image", "imageUrl": "https://example.test/shot.png"],
+            ["type": "render", "renderKind": "image", "imageUrl": "file:///tmp/shot.png"],
+        ]
+        let contents = try JSONDecoder().decode([ChatContent].self, from: JSONSerialization.data(withJSONObject: blocks))
+        #expect(contents.map(\.fileAction) == [target, nil, nil])
+        #expect(contents.map { $0.remoteImageURL?.absoluteString } == [nil, "https://example.test/shot.png", nil])
+    }
+
     // Legacy text, supported file cards and unknown future blocks all decode in the same reply without granting unknown actions.
     @Test func unreadableRenderPayloadKeepsFallbackWithoutBecomingInteractive() throws {
         let target = "orbis-message-file:" + String(repeating: "b", count: 64)

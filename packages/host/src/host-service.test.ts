@@ -4422,6 +4422,42 @@ describe("Codex 虚拟 runtime 接线（spec §7.4 的 M4 验收）", () => {
       const offer = await next(message => (message.event as RuntimeEvent | undefined)?.type === "artifact.started");
       expect(offer).toMatchObject({ event: { artifact: { fileName: "生成图.png", path: referenceId, size: 13 } } });
     }
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aR8sAAAAASUVORK5CYII=";
+    const complete = (id: string) => next(message => {
+      const event = message.event as RuntimeEvent | undefined;
+      return event?.type === "message.finished" && event.message.messageId === id;
+    }).then(message => (message.event as Extract<RuntimeEvent, { type: "message.finished" }>).message);
+    notify("item/completed", { ...route, item: { id: "view", type: "imageView", path: imagePath } });
+    const view = await complete("view");
+    expect(JSON.stringify(view)).not.toContain(imagePath);
+    expect(view.content[0]).toMatchObject({ type: "tool_call", ...(rich ? { file: { fileName: "生成图.png" } } : {}) });
+    notify("item/completed", { ...route, item: { id: "generated-inline", type: "imageGeneration", status: "completed", result: png } });
+    const inline = await complete("generated-inline");
+    expect(JSON.stringify(inline)).not.toContain(png);
+    if (rich) {
+      const block = inline.content[0];
+      if (block?.type !== "render" || !block.file) throw new Error("Missing inline image download");
+      const referenceId = block.file.referenceId;
+      device.sendCommand(runtime.runtimeIdFor(thread.id), "download-inline", { type: "file.download", path: referenceId });
+      const payload = Buffer.from(png, "base64");
+      const offer = await next(message => (message.event as RuntimeEvent | undefined)?.type === "artifact.started");
+      expect(offer).toMatchObject({ event: { commandId: "download-inline",
+        artifact: { fileName: "image.png", path: referenceId, mimeType: "image/png", size: payload.length },
+      } });
+      const transferId = (offer.event as Extract<RuntimeEvent, { type: "artifact.started" }>).transferId;
+      device.sendPayload(Buffer.from(JSON.stringify({ type: "artifact.read", protocolVersion: PROTOCOL_VERSION,
+        transferId, requestId: "inline-chunk", offset: 0, length: payload.length })));
+      const chunk = decodeArtifactChunkFrame(await device.receivePayload());
+      expect(Buffer.from(chunk.data)).toEqual(payload);
+      const viewBlock = view.content[0];
+      if (viewBlock?.type !== "tool_call" || !viewBlock.file) throw new Error("Missing imageView download");
+      device.sendCommand(runtime.runtimeIdFor(thread.id), "download-view", { type: "file.download", path: viewBlock.file.referenceId });
+      expect(await next(message => (message.event as RuntimeEvent | undefined)?.type === "artifact.started")).toMatchObject({ event: {
+        artifact: { fileName: "生成图.png", path: viewBlock.file.referenceId, size: 13 },
+      } });
+    } else {
+      expect(inline.content).toEqual([{ type: "text", text: "生成图片暂不可显示" }]);
+    }
   });
 
   it("rejects malformed and future inputs with their original command identity", async () => {

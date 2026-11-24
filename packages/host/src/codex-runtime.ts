@@ -28,6 +28,7 @@ import { open, readdir, readFile, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { CodexOutputMedia, codexMediaPath } from "./codex-output-media.js";
 import { displayBatchFor, NotificationSource, SessionSyncPreparer, SESSION_SYNC_PAGE_BYTES, SESSION_SYNC_WRAPPER_BYTES, ToolInventorySource, WireTruncator, projectWireLive } from "@orbis/protocol";
 import { orbisEnvironment, messageInputDecision, canDispatchMessage, inputMutationError, configurationMutationError, type RuntimeInputState } from "@orbis/protocol";
 import { ToolContentCapture, ToolContentReadError, type ToolContentReader, type ToolContentStore } from "@orbis/runtime-bridge";
@@ -422,6 +423,7 @@ export class CodexRuntime implements AgentBackend {
   #server: CodexAppServer;
   /** 活跃 thread 表。codex 的 thread/resume 返回完整 turns，激活即拿到历史。 */
   readonly #generatedImages = new Map<string, string>();
+  readonly #outputMedia: CodexOutputMedia;
   readonly #threads = new Map<string, ThreadState>();
   readonly #taskRegistries = new WeakMap<CodexAppServer, CodexTaskRegistry>();
   readonly #taskChecks = new WeakMap<ThreadState, Promise<void>>();
@@ -543,7 +545,16 @@ export class CodexRuntime implements AgentBackend {
     const summary = codexToolSummary({ agent, phase, order: thread.itemOrder.indexOf(String(item.id)),
       ...(turnId === undefined ? {} : { turnId }), entryId: String(item.id) + ":result",
       ...(contentSources === undefined ? {} : { contentSources }) }, item);
-    return { id: item.id, type: item.type, orbisToolSummary: summary };
+    const path = item.type === "imageView" ? codexMediaPath(item.path) : undefined;
+    const images = item.type === "dynamicToolCall" && Array.isArray(item.contentItems)
+      ? item.contentItems.flatMap((raw): RemoteContent[] => {
+        const part = object(raw);
+        if (part.type !== "inputImage" && part.type !== "input_image") return [];
+        const path = codexMediaPath(part.path);
+        return [path ? { type: "render", renderKind: "image", text: path.split(/[\\/]/u).at(-1)!, sourcePath: path }
+          : this.#outputMedia.image(part.imageUrl ?? part.image_url, "图片") ?? { type: "render", renderKind: "image", text: "图片不可用" }];
+      }) : [];
+    return { id: item.id, type: item.type, orbisToolSummary: summary, path, images };
   }
   readonly toolContents: ToolContentReader = {
     read: async (owner, request, signal) => {
@@ -584,6 +595,7 @@ export class CodexRuntime implements AgentBackend {
   };
 
   constructor(options: CodexRuntimeOptions) {
+    this.#outputMedia = new CodexOutputMedia(options.log);
     this.runtimeId = options.runtimeId ?? (isDesktopAppServer(options.server) ? CODEX_DESKTOP_RUNTIME_ID : CODEX_RUNTIME_ID);
     this.#options = options;
     if (options.toolContentStore) this.setToolContentStore(options.toolContentStore, "local");
@@ -731,6 +743,7 @@ export class CodexRuntime implements AgentBackend {
     await this.#server.stop();
     this.#server.onExit?.(0);
     await Promise.all(this.#terminalConnectionClosures);
+    await this.#outputMedia.dispose();
   }
 
   /** 是否挂着活跃 thread：Host 的进程目录只在这时收录 Codex（§8.1）。 */
@@ -1958,7 +1971,7 @@ export class CodexRuntime implements AgentBackend {
       const reviewReplies = new Set(items.map(object).filter(item => item.type === "agentMessage").map(extractContentText));
       for (const item of items) {
         if (item !== null && typeof item === "object") {
-          let record = item as Record<string, unknown>;
+          let record = normalizeItemTypes(item as Record<string, unknown>);
           this.#noteItem(thread, record);
           // FT-G12-LIVE-01: reasoning, messages and activity rows carry no status. Without a
           // completion signal an active read leaves them neither running nor complete, and every
@@ -3881,7 +3894,7 @@ export class CodexRuntime implements AgentBackend {
       case "item/started": {
         const item = record.item;
         if (item === null || typeof item !== "object") return;
-        let data = item as Record<string, unknown>;
+        let data = normalizeItemTypes(item as Record<string, unknown>);
         const tasks = thread.tasks.observeItem(data);
         if (tasks) this.#emit(thread.id, { type: "execution.tasks", tasks });
         if (data.type === "contextCompaction") {
@@ -3995,7 +4008,7 @@ export class CodexRuntime implements AgentBackend {
       case "item/completed": {
         const item = record.item;
         if (item === null || typeof item !== "object") return;
-        let data = item as Record<string, unknown>;
+        let data = normalizeItemTypes(item as Record<string, unknown>);
         if (data.type === "exitedReviewMode" && typeof record.turnId === "string" && record.turnId === thread.turnId) {
           this.#noteItem(thread, data);
           thread.pendingReview = { item: data, turnId: record.turnId };
@@ -4026,7 +4039,7 @@ export class CodexRuntime implements AgentBackend {
           thread.streamingMessageId = undefined;
         }
         // item 通知自带 turnId（`ItemCompletedNotification` 的 required 字段），条目归属由此确定。
-        this.#completeItem(thread, data, typeof record.turnId === "string" ? record.turnId : undefined);
+        data = this.#completeItem(thread, data, typeof record.turnId === "string" ? record.turnId : undefined);
         if (data.type === "userMessage") this.#confirmQueuedMessage(thread, data.clientId);
         this.#pruneCanonicalLive(thread);
         const raw = toolCallMessage(data) ?? itemToMessage(data);
@@ -4477,14 +4490,17 @@ export class CodexRuntime implements AgentBackend {
     if (typeof item.id === "string" && !thread.itemOrder.includes(item.id)) thread.itemOrder.push(item.id);
   }
 
-  #completeItem(thread: ThreadState, item: Record<string, unknown>, turnId?: string): void {
-    if (typeof item.id !== "string") return;
+  #completeItem(thread: ThreadState, item: Record<string, unknown>, turnId?: string): Record<string, unknown> {
+    if (typeof item.id !== "string") return item;
     const itemId = item.id;
     if (item.type === "imageGeneration") {
       const key = JSON.stringify([this.runtimeIdFor(thread.id), itemId]);
       this.#generatedImages.delete(key);
-      const path = item.savedPath;
-      if (item.status === "completed" && typeof path === "string" && path.length <= 4096 && isAbsolute(path)) {
+      const block = item.orbisGeneratedImage;
+      const { path, block: media } = block === undefined ? this.#outputMedia.generated(item)
+        : { path: codexMediaPath(item.orbisGeneratedPath), block };
+      item = { id: itemId, type: item.type, orbisGeneratedImage: media, orbisGeneratedPath: path };
+      if (path !== undefined) {
         this.#generatedImages.set(key, path);
         if (this.#generatedImages.size > 4096) this.#generatedImages.delete(this.#generatedImages.keys().next().value!);
       }
@@ -4493,7 +4509,7 @@ export class CodexRuntime implements AgentBackend {
     this.#noteItem(thread, item);
     if (thread.itemOrder.indexOf(itemId) < thread.committedItemCount) {
       this.#appendEntry(thread, item, turnId);
-      return;
+      return item;
     }
     thread.completedItems.set(itemId, { item, turnId });
     // Tools can finish out of order. Keep the source item order, or replay will change parents.
@@ -4505,6 +4521,7 @@ export class CodexRuntime implements AgentBackend {
       thread.completedItems.delete(id);
       thread.committedItemCount++;
     }
+    return item;
   }
 
   /**
@@ -4844,7 +4861,7 @@ function toolCallMessage(item: Record<string, unknown>): ChatMessage | undefined
       toolName: tool.toolName,
       summary: tool.summary,
       ...(item.type === "imageView" && typeof item.path === "string" ? { sourcePath: item.path } : {}),
-    }],
+    }, ...(Array.isArray(item.images) ? item.images as RemoteContent[] : [])],
     timestamp: Date.now(),
   };
 }
@@ -5102,8 +5119,8 @@ function itemToMessage(item: Record<string, unknown>): ChatMessage | undefined {
         timestamp,
       };
     case "imageGeneration":
-      return { messageId: id, role: "assistant", content: [{ type: "render", renderKind: "codex_generated_image",
-        text: item.status === "failed" ? "图片生成失败" : "生成图片暂不可显示" }], timestamp };
+      return { messageId: id, role: "assistant", content: [(item.orbisGeneratedImage as RemoteContent | undefined) ??
+        { type: "render", renderKind: "codex_generated_image", text: "生成图片暂不可显示" }], timestamp };
     case "mcpToolCall":
       return {
         messageId: id,
@@ -5144,7 +5161,7 @@ function codexUserContent(item: Record<string, unknown>): RemoteContent[] {
 }
 
 function isAttachmentPath(path: string): boolean {
-  return path.length <= 4_096 && !/[\u0000-\u001f\u007f]/u.test(path) &&
+  return path.length <= 4_096 && !Array.from(path).some(ch => ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127) &&
     (path.startsWith("/") || /^[a-z]:[\\/]/iu.test(path));
 }
 
@@ -5336,7 +5353,7 @@ function parseJsonLine(line: string): { type?: unknown; payload?: unknown } | un
 function normalizeItemTypes(item: Record<string, unknown>): Record<string, unknown> {
   const type = item.type;
   if (typeof type !== "string" || type.length === 0) return item;
-  const camel = type.charAt(0).toLowerCase() + type.slice(1);
+  const camel = type === "image_generation" ? "imageGeneration" : type.charAt(0).toLowerCase() + type.slice(1);
   return camel === type ? item : { ...item, type: camel };
 }
 

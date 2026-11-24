@@ -87,7 +87,7 @@ describe("Codex producer tool projection (ADR-0045)", () => {
     const tool = { id: "dynamic", type: "dynamicToolCall", tool: "capture", success: true,
       contentItems: [{ type: "inputText", text: "Result" }, { type: "inputImage", imageUrl: "private" }] };
     expect(codexToolSummary(context(), tool)).toMatchObject({ toolName: "capture", isError: false });
-    expect([...codexToolContents(tool)]).toEqual([{ part: "result", format: "text", value: "Result\n图片内容暂不可显示" }]);
+    expect([...codexToolContents(tool)]).toEqual([{ part: "result", format: "text", value: "Result" }]);
     const app = codexToolSummary(context(), { id: "app", type: "mcpToolCall", tool: "demo", mcpAppUi: { resourceUri: "ui://private" } });
     expect(app?.resultSummary?.text).toBe("应用内容暂不可显示");
     expect(JSON.stringify(app)).not.toContain("ui://private");

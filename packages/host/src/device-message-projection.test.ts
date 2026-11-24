@@ -102,13 +102,15 @@ describe("FT-G01 menu-only device projection", () => {
     const event = { type: "session.snapshot", source: { ready: true }, entries: [{ type: "message", data: { message: {
       messageId: "m", role: "assistant", timestamp: 1,
       content: [{ type: "render", renderKind: "file_reference", text: "answer.md", file: { referenceId: `orbis-message-file:${"a".repeat(64)}`, fileName: "answer.md", line: 8 }, purpose: "output",
-        sourceSecret: "must-be-removed" }, { type: "render", renderKind: "image", text: "shot.png", imageUrl: "https://example.test/shot.png", sourceSecret: "must-be-removed" }],
+        sourceSecret: "must-be-removed" }, { type: "render", renderKind: "image", text: "shot.png", imageUrl: "https://example.test/shot.png", sourceSecret: "must-be-removed" },
+        { type: "tool_call", toolCallId: "view", toolName: "查看图片", sourcePath: "must-be-removed", file: { fileName: "shot.png", referenceId: `orbis-message-file:${"b".repeat(64)}` } }],
     } } }] };
     const input = { ...eventMessage(event), event };
     const output = projectCompactDeviceMessage(input) as typeof input;
     expect(output.event.entries[0]!.data.message.content).toEqual([{ type: "render", renderKind: "file_reference", text: "answer.md",
       file: { referenceId: `orbis-message-file:${"a".repeat(64)}`, fileName: "answer.md", line: 8 }, purpose: "output" },
-      { type: "render", renderKind: "image", text: "shot.png", imageUrl: "https://example.test/shot.png" }]);
+      { type: "render", renderKind: "image", text: "shot.png", imageUrl: "https://example.test/shot.png" },
+      { type: "tool_call", toolCallId: "view", toolName: "查看图片", file: { fileName: "shot.png", referenceId: `orbis-message-file:${"b".repeat(64)}` } }]);
     expect(JSON.stringify(output)).not.toContain("must-be-removed");
   });
 

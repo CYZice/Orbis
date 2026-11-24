@@ -510,7 +510,7 @@ export const LoopbackDescriptorSchema = z.strictObject({
 });
 export type LoopbackDescriptor = z.infer<typeof LoopbackDescriptorSchema>;
 
-const MessageFileReferenceSchema = z.strictObject({
+export const MessageFileReferenceSchema = z.strictObject({
   referenceId: z.string().regex(/^orbis-message-file:[a-f0-9]{64}$/).optional(),
   fileName: safeFileName,
   line: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
