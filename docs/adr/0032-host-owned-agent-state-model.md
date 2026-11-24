@@ -186,3 +186,10 @@ Host 承担投影存储、领域协调、范围缓存与恢复调度，以预算
 `AgentConversationState.invalidateBaseline` 现在连同 `epoch` / `seq` 一起丢掉当前投影（页面缓存与字节记账同步回收），下一块补丁按「还没有基线」的握手接收，流恢复；旧 epoch 记进独立的 `#retired`（与当前投影同预算），迟到事件仍以 `retired_source_epoch` 被拒。`offline` 保留原语义：断线只丢可恢复性，已读到的行仍供按 id 取回原文。握手本身仍不是基线，重建基线仍要一次快照；作废后下一块补丁以未就绪握手到达，两端据此各自强制重新同步（iOS `syncSession(force:)`、Android `requestRecovery`），因此不需要 Host 主动索取快照。
 
 实现与回归：[agent-conversation-state.ts](../../packages/host/src/agent-conversation-state.ts)、[agent-conversation-state.test.ts](../../packages/host/src/agent-conversation-state.test.ts)、[host-service.test.ts](../../packages/host/src/host-service.test.ts)。自动验证：会话投影 22 项、Host 端到端 95 项（Kimi 握手用例为同树其它改动引入的既有失败）、Codex 运行时 231 项，`tsc -b` 与 ESLint 通过；变异检验把作废改回「只置 ready=false」时新增的 3 项全部失败。证据与未覆盖边界见 [.artifacts/20261119-codex-source-02/](../../.artifacts/20261119-codex-source-02/)。当前运行的 Host 仍是本次修改前的安装包，现场计数需重装后复测。
+
+
+## Codex 当前来源不受退役记录容量限制（CODEX-SOURCE-03）
+
+Codex 来源切换超过 64 次时，Registry、正文投影或工具清单会拒绝新来源；同一 Host 继续发布运行状态和时间线，正文却停在上一次成功投影，重新同步也拿不到新基线。Host 现在向当前挂载的 Codex/Codex Desktop 适配器核对线程的来源代次，才接收消息增量、快照或使用缓存恢复。通过核对的来源切换可在有界退役集合中淘汰最旧记录；过期来源即使已从集合淘汰仍会被 Host 拒绝，既有基线与序号校验保持不变。其他适配器的退役上限策略不变。
+
+加密设备回归驱动原生 `thread/reverted` 切换 68 次，每轮读取正文快照及工具清单；注入已淘汰来源的增量后，当前快照和新正文仍送达。该用例覆盖 Host 协议链路，真机历史会话恢复另行验证。

@@ -111,6 +111,8 @@ export type RegistryOptions = {
   readonly maxEntries?: number;
   /** 拒绝超过上限的新代次，不能靠遗忘旧代次来接受迟到数据。重建模型可释放这些有界 tombstone。 */
   readonly maxRetiredEpochsPerEntry?: number;
+  /** In-process adapter authority, independent of the bounded retired-epoch sets. */
+  readonly isCurrentConversationEpoch?: (scope: StateScope, epoch: string) => boolean;
 };
 
 type Entry = {
@@ -134,6 +136,7 @@ export class AgentStateRegistry {
   readonly #maxValueBytes: number;
   readonly #maxEntries: number;
   readonly #maxRetiredEpochsPerEntry: number;
+  readonly #verifyConversationEpoch: RegistryOptions["isCurrentConversationEpoch"];
   #entries = new Map<string, Entry>();
   readonly #listeners = new Set<RegistryListener>();
   #transactionChanges: RegistryChange[] | undefined;
@@ -145,9 +148,21 @@ export class AgentStateRegistry {
     this.#maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
     this.#maxRetiredEpochsPerEntry = options.maxRetiredEpochsPerEntry ?? DEFAULT_MAX_RETIRED_EPOCHS;
     this.#modelEpoch = options.modelEpoch ?? randomUUID();
+    this.#verifyConversationEpoch = options.isCurrentConversationEpoch;
   }
 
   currentModelEpoch(): string { return this.#modelEpoch; }
+
+  isCurrentConversationEpoch(scope: StateScope, epoch: string): boolean {
+    return this.#verifyConversationEpoch?.(scope, epoch) === true;
+  }
+
+  #canForgetRetiredEpoch(scope: StateScope, domain: StateDomain, source: DomainSource): boolean {
+    if (scope.kind !== "agent" || source.producer !== "adapter") return false;
+    const owner = domain === "tools" ? "tools" : domain === "history" || domain === "live" || domain === "artifacts" ? "conversation" : undefined;
+    return owner !== undefined && source.sourceId === `${owner}:${scope.key.agentKind}` &&
+      this.isCurrentConversationEpoch(scope, source.sourceEpoch);
+  }
 
   /**
    * 将同一来源事务涉及的多个领域一起提交。任一校验失败即回滚全部领域与来源水位；
@@ -347,7 +362,7 @@ export class AgentStateRegistry {
       return { ok: false, code: "source_epoch_baseline_required" };
     }
     if (existing.state.source.sourceEpoch !== fact.source.sourceEpoch) {
-      if (existing.retiredEpochs.size >= this.#maxRetiredEpochsPerEntry) {
+      if (existing.retiredEpochs.size >= this.#maxRetiredEpochsPerEntry && !this.#canForgetRetiredEpoch(scope, domain, fact.source)) {
         return { ok: false, code: "source_epoch_limit" };
       }
       // 标记「来源未知/失败」永远允许：它保留最后已知值并标明待核对（ADR-0032 §9）。
@@ -397,6 +412,7 @@ export class AgentStateRegistry {
     const epochChanged = existing !== undefined && existing.state.source.sourceEpoch !== fact.source.sourceEpoch;
     if (epochChanged) {
       retiredEpochs.add(existing.state.source.sourceEpoch);
+      if (retiredEpochs.size > this.#maxRetiredEpochsPerEntry) retiredEpochs.delete(retiredEpochs.values().next().value!);
     }
     const baselineRequired = fact.availability === "ready" && fact.completeness === "complete"
       ? false : epochChanged || (existing?.baselineRequired ?? false);

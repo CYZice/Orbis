@@ -4359,6 +4359,86 @@ describe("Codex 虚拟 runtime 接线（spec §7.4 的 M4 验收）", () => {
     });
   });
 
+  it("keeps Codex snapshots, tool inventory and live replies updating beyond 64 source epochs", async () => {
+    stateDir = await mkdtemp(join(tmpdir(), "orbis-codex-epoch-rollover-"));
+    relay = await startRelayLocal(stateDir);
+    const thread = { id: "epoch-thread", cwd: stateDir, turns: [], status: { type: "idle" } };
+    const server = { mode: "owned", request: vi.fn(async (method: string) => {
+      if (["thread/start", "thread/read", "thread/resume"].includes(method)) return { thread };
+      if (method === "config/read") return { config: {} };
+      return { data: [] };
+    }), notify: vi.fn(), stop: vi.fn(async () => {}) } as unknown as CodexAppServer;
+    const runtime = new CodexRuntime({ server, onEvent: () => {}, rolloutRoot: join(stateDir, "rollouts") });
+    const setSink = vi.spyOn(runtime, "setEventSink");
+    host = await HostService.create({ relayUrl: relay.url, ...relayBusinessHostOptions(relay.url), credential: "runtime-secret", adminToken: "owner-secret",
+      stateDir, reconnect: false, lan: false, codexRuntime: runtime });
+    await host.start(); device = await readyDeviceLocal({ host, relay });
+    const next = async (predicate: (message: Record<string, unknown>) => boolean) => {
+      for (let i = 0; i < 50; i++) {
+        const message = await device!.receiveMessage();
+        expect(message.type, JSON.stringify(message)).not.toBe("protocol.error");
+        if (predicate(message)) return message;
+      }
+      throw new Error("missing Codex conversation update");
+    };
+    sendRequest(device, { type: "session.activate", protocolVersion: PROTOCOL_VERSION, requestId: "activate-epoch",
+      target: { type: "new", agentKind: "codex", cwd: stateDir } });
+    await next(message => message.requestId === "activate-epoch" && message.type === "session.activated");
+    const runtimeId = runtime.runtimeIdFor(thread.id);
+    const read = async (syncId: string) => {
+      device!.sendCommand(runtimeId, syncId, { type: "session.sync", sessionId: thread.id, syncId, range: "preview" });
+      const response = await next(message => {
+        const event = message.event as RuntimeEvent | undefined;
+        return event?.type === "session.snapshot" && event.syncId === syncId;
+      });
+      device!.sendCommand(runtimeId, `${syncId}-ack`, { type: "session.snapshot.ack", syncId, result: "applied" });
+      return response.event as Extract<RuntimeEvent, { type: "session.snapshot" }>;
+    };
+    const initial = await read("initial");
+    let current = initial;
+    const notify = server.onNotification!;
+    const seen = new Set([initial.source!.epoch]);
+    for (let i = 0; i < 68; i++) {
+      notify("thread/reverted", { threadId: thread.id });
+      const announced = await next(message => {
+        const event = message.event as RuntimeEvent | undefined;
+        return event?.type === "session.patch" && event.source.ready && !seen.has(event.source.epoch);
+      });
+      const epoch = (announced.event as Extract<RuntimeEvent, { type: "session.patch" }>).source.epoch;
+      const turnId = `tool-turn-${i}`;
+      const itemId = `tool-${i}`;
+      notify("turn/started", { threadId: thread.id, turn: { id: turnId } });
+      notify("item/started", { threadId: thread.id, turnId,
+        item: { id: itemId, type: "commandExecution", command: "dir", cwd: stateDir } });
+      await next(message => {
+        const event = message.event as RuntimeEvent | undefined;
+        return event?.type === "session.patch" && event.source.epoch === epoch &&
+          (event.live?.toolInventory?.totalCount ?? 0) > 0;
+      });
+      current = await read(`epoch-${i}`);
+      expect(current.source).toMatchObject({ epoch, ready: true });
+      expect(current.live?.toolInventory?.source.epoch).toBe(epoch);
+      seen.add(epoch);
+    }
+    const sink = setSink.mock.calls[0]![0]!;
+    const staleSeq = initial.source!.seq + 1;
+    sink({ type: "session.patch", sessionId: thread.id, source: { ...initial.source!, seq: staleSeq },
+      baseSeq: staleSeq - 1, seq: staleSeq, checkpointId: "stale", head: { leafId: null },
+      headCompleteness: "complete", live: initial.live! }, thread.id);
+    expect(await read("after-stale")).toMatchObject({ source: { epoch: current.source!.epoch, ready: true } });
+    const route = { threadId: thread.id, turnId: "fresh-turn" };
+    notify("turn/started", { threadId: thread.id, turn: { id: route.turnId } });
+    notify("item/agentMessage/delta", { ...route, itemId: "fresh-reply", delta: "正文继续更新" });
+    await next(message => {
+      const event = message.event as RuntimeEvent | undefined;
+      return event?.type === "session.patch" && event.source.epoch === current.source!.epoch &&
+        event.live?.messages.some(row => row.message.content.some(block => block.type === "text" && block.text === "正文继续更新")) === true;
+    });
+    const diagnostics = await readFile(join(stateDir!, "diagnostics.ndjson"), "utf8");
+    expect(diagnostics).not.toContain("source_epoch_limit");
+    expect(diagnostics).toContain("inactive_conversation_source");
+  }, 30_000);
+
   // MSG-RENDER-01: exercise the real Codex adapter and encrypted download route, not a loopback Pi impersonating Codex.
   it.each([false, true])("delivers Codex output references with capability %s", async rich => {
     stateDir = await mkdtemp(join(tmpdir(), "orbis-message-render-wire-"));

@@ -135,7 +135,7 @@ export class AgentConversationState {
     if (scope.kind !== "agent" || event.sessionId !== scope.key.sessionId) return reject("session_scope_mismatch");
     const key = scopeKey(scope), source = event.source, old = this.#current.get(key);
     if (!source || !Number.isSafeInteger(source.seq) || source.seq < 0) return reject("invalid_source");
-    if (old?.retired.has(source.epoch)) return reject("retired_source_epoch");
+    if ((old?.retired ?? this.#retired.get(key))?.has(source.epoch)) return reject("retired_source_epoch");
     if (!this.#validDisplay(event, old?.source.epoch === source.epoch ? old : undefined)) return reject("invalid_display");
     const range = event.type === "session.snapshot" && (event.range === "history" || event.range === "catchup");
     if (range) {
@@ -169,7 +169,13 @@ export class AgentConversationState {
     if (event.type === "session.snapshot" && head && head.leafId !== event.cursor.leafId) return reject("snapshot_head_mismatch");
     let ready = !handshake && source.ready && (event.type === "session.patch" ? event.headCompleteness === "complete" : event.checkpoint?.headCompleteness === "complete" && event.checkpoint.inventoryComplete) && event.live?.complete === true && head !== undefined;
     const retired = new Set(old?.retired ?? this.#retired.get(key));
-    if (old && !sameEpoch) { if (retired.size >= 64) return reject("source_epoch_limit"); retired.add(old.source.epoch); }
+    if (old && !sameEpoch) {
+      if (retired.size >= 64) {
+        if (!this.#registry.isCurrentConversationEpoch(scope, source.epoch)) return reject("source_epoch_limit");
+        retired.delete(retired.values().next().value!);
+      }
+      retired.add(old.source.epoch);
+    }
     if (!old && this.#current.size >= this.#limits.maxCurrentSessions) return reject("current_session_limit");
     if (bytesOfEvent(event) > this.#limits.maxPageBytes) ready = false;
     if (ready && old?.source.ready && sameEpoch && old.source.seq === source.seq &&

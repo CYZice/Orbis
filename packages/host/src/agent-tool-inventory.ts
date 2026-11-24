@@ -97,7 +97,10 @@ export class AgentToolInventory {
     if (previous?.retired.has(source.epoch) || (previous && !replaced && source.seq < previous.latestSource.seq)) return fail("stale_source");
     const retired = new Set(previous?.retired);
     if (replaced) retired.add(previous!.latestSource.epoch);
-    if (retired.size > this.#limits.maxRetiredEpochs) return fail("inventory_limit");
+    if (retired.size > this.#limits.maxRetiredEpochs) {
+      if (!this.#registry.isCurrentConversationEpoch({ kind: "agent", key: agent }, source.epoch)) return fail("inventory_limit");
+      retired.delete(retired.values().next().value!);
+    }
     const upserts = input.update.kind === "baseline" ? input.update.tools : input.update.upserts;
     const removes = input.update.kind === "baseline" ? [] : input.update.removes;
     if (upserts.length > this.#limits.maxToolsPerSession || removes.length > this.#limits.maxToolsPerSession) return fail("inventory_limit");

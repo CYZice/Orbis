@@ -1327,6 +1327,14 @@ export class CodexRuntime implements AgentBackend {
     return runtimeId === this.runtimeId || runtimeId.startsWith(`${this.runtimeId}:`);
   }
 
+  /** Only the attached adapter's live thread can vouch for an epoch. */
+  ownsConversationEpoch(sessionId: string, epoch: string): boolean {
+    const prefix = `${CODEX_DESKTOP_RUNTIME_ID}:`;
+    const threadId = this.kind === "codexDesktop" && sessionId.startsWith(prefix) ? sessionId.slice(prefix.length) : sessionId;
+    const thread = this.#threads.get(threadId);
+    return thread !== undefined && this.#publicSessionId(threadId) === sessionId && thread.sourceEpoch === epoch;
+  }
+
   async readSessionEntry(runtimeId: string, sessionId: string, entryId: string): Promise<RemoteSessionEntry | undefined> {
     const id = this.#threadIdOf(runtimeId), thread = id === undefined ? undefined : this.#threads.get(id);
     return thread && this.#publicSessionId(thread.id) === sessionId ? thread.entries.find(entry => entry.entryId === entryId) : undefined;

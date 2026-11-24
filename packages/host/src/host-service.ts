@@ -435,7 +435,11 @@ export class HostService {
     let inventory: PreparedToolInventory | undefined;
     let accepted = false;
     try {
-      accepted = scope !== undefined && this.#conversationState.accept(scope, event, ready => {
+      if (scope && this.#isCodexScope(scope) && (!event.source ||
+          !this.#agentStateRegistry.isCurrentConversationEpoch(scope, event.source.epoch))) {
+        reason = "inactive_conversation_source";
+        onRejected?.(reason);
+      } else accepted = scope !== undefined && this.#conversationState.accept(scope, event, ready => {
         const facts = this.#agentFacts.prepareConversation(runtimeId, event, ready);
         if (!ready || scope.kind !== "agent" || !event.source || !event.live?.toolInventory) return facts;
         inventory = this.#toolIngestion.prepare(runtimeId, scope.key, event.source, event.live.toolInventory);
@@ -795,7 +799,8 @@ export class HostService {
         delete forwarded.historyWindow;
         if (!scope || !this.#conversationState.hasBaseline(scope)) delete forwarded.knownState;
         const recovered = scope ? this.#conversationState.recover(scope, forwarded) : undefined;
-        if (recovered) {
+        if (recovered && (!this.#isCodexScope(scope) || (scope && recovered.source &&
+            this.#agentStateRegistry.isCurrentConversationEpoch(scope, recovered.source.epoch)))) {
           queueMicrotask(() => this.#publishRuntimeEvent(runtimeId, recovered));
           return "handled";
         }
@@ -905,7 +910,10 @@ export class HostService {
     ];
     this.#backends = backends;
     // 共享同一个单写者：Agent 事实与设备视图回执都写进这一份模型。
-    const agentStateRegistry = new AgentStateRegistry({ maxValueBytes: 4 * 1024 * 1024 });
+    const agentStateRegistry = new AgentStateRegistry({ maxValueBytes: 4 * 1024 * 1024,
+      isCurrentConversationEpoch: (scope, epoch) => scope.kind === "agent" && this.#backends.some(backend =>
+        backend instanceof CodexRuntime && backend.kind === scope.key.agentKind && backend.ownsConversationEpoch(scope.key.sessionId, epoch)),
+    });
     const agentStateOptions = {
       registry: agentStateRegistry,
       hostId: this.#identity.hostId,
@@ -3052,9 +3060,12 @@ export class HostService {
     this.#options.onPathChange?.(deviceId, change);
   }
 
-  #isCodexRuntime(runtimeId: string): boolean {
-    const scope = this.#agentFacts.scopeOf(runtimeId);
+  #isCodexScope(scope: StateScope | undefined): boolean {
     return scope?.kind === "agent" && (scope.key.agentKind === "codex" || scope.key.agentKind === "codexDesktop");
+  }
+
+  #isCodexRuntime(runtimeId: string): boolean {
+    return this.#isCodexScope(this.#agentFacts.scopeOf(runtimeId));
   }
 
   #encodeForDevice(deviceId: string, message: object): Buffer {
@@ -3179,7 +3190,7 @@ export class HostService {
       if (!this.#acceptConversation(runtimeId, event, reason => { rejectionReason = reason; })) {
         if (["patch_baseline_mismatch", "handshake_base_mismatch", "unknown_patch_base_mismatch", "unknown_epoch_base_mismatch"]
             .includes(rejectionReason ?? "")) this.#invalidateConversationBaseline(runtimeId, event, rejectionReason!);
-        this.#loopback?.sendResync(runtimeId, "model_baseline_required");
+        if (rejectionReason !== "inactive_conversation_source") this.#loopback?.sendResync(runtimeId, "model_baseline_required");
         return;
       }
     }
