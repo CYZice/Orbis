@@ -419,14 +419,14 @@ struct SessionSummary: Codable, Hashable, Identifiable {
     var archived: Bool?
     var modelProvider: String? = nil
     var hostname: String? = nil
+    var codexProject: CodexSessionProject? = nil
     var id: String { sessionId }
 }
 
-struct NativeCodexProject: Codable, Hashable {
-    let cwd: String
+struct CodexSessionProject: Codable, Hashable {
+    let projectId: String
     let name: String
-    let recencyAt: Int64? = nil
-    let projectId: String? = nil
+    let cwd: String
 }
 
 struct MessageFileReference: Codable, Hashable {

@@ -296,6 +296,7 @@ export const AgentCatalogSessionSchema = z.strictObject({
   modifiedAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   /** Native thread recency (Codex thread/list), distinct from persistence updates. */
   recencyAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  codexProject: z.strictObject({ projectId: identity, name: z.string().min(1).max(256), cwd: z.string().min(1).max(4096) }).optional(),
   messageCount: z.number().int().nonnegative().max(100_000),
   agentKind: AgentKindSchema, hostname: z.string().min(1).max(256), archived: z.boolean().optional(),
   modelProvider: z.string().min(1).max(128).optional(),

@@ -1350,7 +1350,7 @@ internal fun RemoteState.canCreateSessionOn(expectedHostId: String?): Boolean =
  */
 internal fun cachedHistoryTree(state: RemoteState): List<CachedHostGroup> {
     val host = state.sessionHost ?: return emptyList()
-    return groupCachedHistoryRows(host.hostId, host.name, cachedHistoryRows(state, host, state::sessionDisplayName), state.nativeCodexProjects)
+    return groupCachedHistoryRows(host.hostId, host.name, cachedHistoryRows(state, host, state::sessionDisplayName))
 }
 
 /** Resolve row facts separately: status/body changes need not regroup or sort the catalog. */
@@ -1409,29 +1409,22 @@ internal fun groupCachedHistoryRows(
     hostId: String,
     hostName: String,
     rows: List<CachedSessionRow>,
-    nativeProjects: List<NativeCodexProject> = emptyList(),
 ): List<CachedHostGroup> {
-    val projectsByCwd = nativeProjects
-        .filter { it.cwd.isNotBlank() && it.name.isNotBlank() }
-        .associateBy { normalizeProjectPath(it.cwd) }
-    val projectsById = nativeProjects
-        .filter { it.cwd.isNotBlank() && it.name.isNotBlank() }
-        .associateBy { it.projectId ?: "codex-project:${normalizeProjectPath(it.cwd)}" }
     val groups = rows.groupBy { row ->
         if (!row.isCodex) {
             CachedHistoryGroupKey.WorkingDirectory(row.cwd)
         } else {
-            val project = projectsByCwd[normalizeProjectPath(row.cwd)]
-            if (project == null) CachedHistoryGroupKey.UnassignedCodex
-            else CachedHistoryGroupKey.CodexProject(project.projectId ?: "codex-project:${normalizeProjectPath(project.cwd)}")
+            row.catalogEntry?.codexProject?.let { CachedHistoryGroupKey.CodexProject(it.projectId) }
+                ?: CachedHistoryGroupKey.UnassignedCodex
         }
     }
     val directories = groups
         .map { (group, directoryRows) ->
+            val project = if (group is CachedHistoryGroupKey.CodexProject) directoryRows.first().catalogEntry?.codexProject else null
             CachedDirectoryGroup(
                 cwd = when (group) {
                     is CachedHistoryGroupKey.WorkingDirectory -> group.cwd
-                    is CachedHistoryGroupKey.CodexProject -> projectsById.getValue(group.identity).cwd
+                    is CachedHistoryGroupKey.CodexProject -> project!!.cwd
                     CachedHistoryGroupKey.UnassignedCodex -> ""
                 },
                 sessions = directoryRows.sortedWith(
@@ -1439,7 +1432,7 @@ internal fun groupCachedHistoryRows(
                         .thenBy { it.sessionId },
                 ),
                 label = when (group) {
-                    is CachedHistoryGroupKey.CodexProject -> projectsById.getValue(group.identity).name
+                    is CachedHistoryGroupKey.CodexProject -> project!!.name
                     CachedHistoryGroupKey.UnassignedCodex -> L10n.tr("无项目的聊天")
                     is CachedHistoryGroupKey.WorkingDirectory -> null
                 },
@@ -1459,9 +1452,6 @@ private sealed interface CachedHistoryGroupKey {
     data class CodexProject(val identity: String) : CachedHistoryGroupKey
     data object UnassignedCodex : CachedHistoryGroupKey
 }
-
-private fun normalizeProjectPath(path: String): String =
-    path.trim().trimEnd('/', '\\').replace('\\', '/').lowercase()
 
 /**
  * The sidebar tree for every paired computer. Ownership stays in the group's `hostId`, so a

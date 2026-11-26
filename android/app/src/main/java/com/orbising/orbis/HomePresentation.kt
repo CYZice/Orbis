@@ -127,8 +127,12 @@ internal fun RemoteState.homeProjectPickerEntries(): List<RecentHomeProject> {
     val native = nativeCodexProjects.filter { it.cwd.isNotBlank() && it.name.isNotBlank() }.map {
         RecentHomeProject(it.cwd, it.name, it.recencyAt ?: 0L, 0)
     }
+    val assigned = sessions.values.filter { it.archived != true && it.codexProject != null }
+        .groupBy { it.codexProject!! }.map { (project, rows) ->
+            RecentHomeProject(project.cwd, project.name, rows.maxOf { it.recencyAt ?: it.modifiedAt }, rows.size)
+        }.sortedByDescending { it.lastActivityAt }
     val inferred = recentHomeProjects(limit = Int.MAX_VALUE)
-    return (native + inferred).distinctBy {
+    return (native + assigned + inferred).distinctBy {
         it.cwd.trimEnd('/', '\\').lowercase(java.util.Locale.ROOT)
     }
 }

@@ -317,7 +317,7 @@ export class HostStateFacts {
     const matched = inventory?.sessions.filter(session =>
       (query.agentKind === null || session.agentKind === query.agentKind) && (session.archived === true) === query.archived &&
       (!query.directory || createHash("sha256").update(session.cwd).digest("hex") === query.directory) &&
-      (!text || [session.cwd, session.name ?? "", session.firstMessage ?? "", session.sessionId].some(value => searchKey(value).includes(text))) &&
+      (!text || [session.cwd, session.codexProject?.name ?? "", session.codexProject?.cwd ?? "", session.name ?? "", session.firstMessage ?? "", session.sessionId].some(value => searchKey(value).includes(text))) &&
       (query.agentKind !== "codex" && query.agentKind !== "codexDesktop" || query.provider === "all" ||
         query.provider === "current" && current !== undefined && session.modelProvider === current ||
         query.provider === "unknown" && !session.modelProvider || query.provider.startsWith("provider:") && session.modelProvider === query.provider.slice(9))) ?? [];

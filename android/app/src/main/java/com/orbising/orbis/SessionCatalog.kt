@@ -11,6 +11,9 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 @Serializable
+data class CodexSessionProject(val projectId: String, val name: String, val cwd: String)
+
+@Serializable
 data class SessionCatalogEntry(
     val sessionId: String,
     val name: String? = null,
@@ -35,6 +38,7 @@ data class SessionCatalogEntry(
     val cachedDisplayName: String? = null,
     /** Native Codex activity timestamp, if supplied by thread/list. */
     val recencyAt: Long? = null,
+    val codexProject: CodexSessionProject? = null,
 )
 
 /** Loading history must not erase the host supplied by the session directory. */

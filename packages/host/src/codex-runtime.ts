@@ -37,6 +37,7 @@ import { CodexToolContentReader } from "./codex-tool-content-reader.js";
 import { CodexAgentTasks, codexChildThread } from "./codex-agent-tasks.js";
 import { CodexTaskRegistry } from "./codex-task-registry.js";
 import { readCodexTurnConfiguration } from "./codex-turn-configuration.js";
+import { codexProjectId, readCodexDesktopProjects } from "./codex-projects.js";
 import { codexToolContents, codexToolContentText, codexToolSummary, isCodexToolItem as isToolItem } from "./codex-tool-projection.js";
 
 import type {
@@ -1437,7 +1438,7 @@ export class CodexRuntime implements AgentBackend {
   }
 
   /** Native Codex Desktop projects, when supported by the installed app-server.
-   * Older binaries do not expose the experimental API; callers fall back to known cwds. */
+   * Older binaries may not expose this API. A working directory does not imply membership. */
   async listProjects(): Promise<Array<{ cwd: string; name: string; projectId?: string; recencyAt?: number }>> {
     try {
       const response = await this.#server.request("project/list",
@@ -1446,7 +1447,7 @@ export class CodexRuntime implements AgentBackend {
       };
       const projects: Array<{ cwd: string; name: string; projectId?: string; recencyAt?: number }> = [];
       for (const project of response.data ?? []) {
-        const projectId = typeof project.id === "string" && project.id.trim().length > 0 && project.id.length <= 256 ? project.id : undefined;
+        const projectId = codexProjectId(project.id);
         const name = typeof project.name === "string" ? project.name.trim() : "";
         if (!name || name.length > 256 || !Array.isArray(project.roots)) continue;
         const recencyAt = toMillis(project.recencyAt);
@@ -1459,7 +1460,7 @@ export class CodexRuntime implements AgentBackend {
       }
       return projects.slice(0, 120);
     } catch (error) {
-      this.#options.log?.(`Codex project/list 不可用，改用已知工作目录：${describeError(error)}`);
+      this.#options.log?.(`Codex project/list 不可用：${describeError(error)}`);
       return [];
     }
   }
@@ -1477,61 +1478,92 @@ export class CodexRuntime implements AgentBackend {
 
   private async catalogNative(archived = false): Promise<AgentSessionSummary[]> {
     const limit = 200;
-    let live: AgentSessionSummary[] = [];
+    const live: AgentSessionSummary[] = [];
+    const projectIds = new Map<string, string>();
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
     try {
-      const result = (await this.#server.request("thread/list", { limit, modelProviders: [], ...(archived ? { archived: true } : {}) })) as {
-        data?: Array<Record<string, unknown>>;
-      };
-      live = (result.data ?? []).flatMap((thread): AgentSessionSummary[] => {
-        if (isCodexSubagentSource(thread.source, thread.parentThreadId)) return [];
-        const id = thread.id;
-        const cwd = thread.cwd;
-        const createdAt = toMillis(thread.createdAt);
-        const modifiedAt = toMillis(thread.updatedAt);
-        // Native recency advances on turn start, unlike updatedAt (disk and tool writes).
-        // Older app-servers omit recencyAt, so the mobile client falls back safely.
-        const recencyAt = toMillis(thread.recencyAt);
-        const name = codexSessionName(thread.name);
-        const modelProvider = codexProviderId(thread.modelProvider);
-        if (typeof id !== "string" || typeof cwd !== "string" || createdAt === undefined || modifiedAt === undefined) {
-          return [];
+      do {
+        const result = await this.#server.request("thread/list", { limit, modelProviders: [],
+          ...(archived ? { archived: true } : {}), ...(cursor ? { cursor } : {}) }) as {
+          data?: Array<Record<string, unknown>>; nextCursor?: string | null;
+        };
+        for (const thread of result.data ?? []) {
+          if (isCodexSubagentSource(thread.source, thread.parentThreadId)) continue;
+          const id = thread.id;
+          const cwd = thread.cwd;
+          const createdAt = toMillis(thread.createdAt);
+          const modifiedAt = toMillis(thread.updatedAt);
+          // Native recency advances on turn start, unlike updatedAt (disk and tool writes).
+          // Older app-servers omit recencyAt, so the mobile client falls back safely.
+          const recencyAt = toMillis(thread.recencyAt);
+          const name = codexSessionName(thread.name);
+          const modelProvider = codexProviderId(thread.modelProvider);
+          if (typeof id !== "string" || typeof cwd !== "string" || createdAt === undefined || modifiedAt === undefined) {
+            continue;
+          }
+          const projectId = codexProjectId(thread.projectId);
+          if (projectId !== undefined) projectIds.set(id, projectId);
+          live.push({
+            sessionId: id,
+            cwd,
+            hostname: localHostname(),
+            ...(name === undefined ? {} : { name }),
+            ...(typeof thread.preview === "string" && thread.preview.length > 0
+              ? { firstMessage: thread.preview.slice(0, 4_000) }
+              : {}),
+            createdAt,
+            modifiedAt,
+            ...(recencyAt === undefined ? {} : { recencyAt }),
+            messageCount: Array.isArray(thread.turns) ? thread.turns.length : 0,
+            agentKind: "codex",
+            archived,
+            ...(modelProvider === undefined ? {} : { modelProvider }),
+          });
         }
-        return [{
-          sessionId: id,
-          cwd,
-          hostname: localHostname(),
-          ...(name === undefined ? {} : { name }),
-          ...(typeof thread.preview === "string" && thread.preview.length > 0
-            ? { firstMessage: thread.preview.slice(0, 4_000) }
-            : {}),
-          createdAt,
-          modifiedAt,
-          ...(recencyAt === undefined ? {} : { recencyAt }),
-          messageCount: Array.isArray(thread.turns) ? thread.turns.length : 0,
-          agentKind: "codex",
-          archived,
-          ...(modelProvider === undefined ? {} : { modelProvider }),
-        }];
-      });
+        cursor = result.nextCursor || undefined;
+        if (!cursor || cursors.has(cursor)) break;
+        cursors.add(cursor);
+      } while (live.length < 2_000 && cursors.size < 20);
     } catch (error) {
-      // app-server 暂时没就绪（启动中/已退出）不拖垮整个目录：磁盘 rollout 还在。
-      this.#options.log?.(`thread/list 失败，目录只含磁盘 rollout：${describeError(error)}`);
+      this.#options.log?.(`Codex thread/list: ${describeError(error)}`);
     }
     const disk = await this.#diskCatalog(archived);
     const diskById = new Map(disk.map((entry) => [entry.sessionId, entry]));
     const liveIds = new Set(live.map((entry) => entry.sessionId));
-    return [
+    const rows = [
       ...live.map((entry) => {
         const modelProvider = entry.modelProvider ?? diskById.get(entry.sessionId)?.modelProvider;
         return modelProvider === undefined ? entry : { ...entry, modelProvider };
       }),
       ...disk.filter((entry) => !liveIds.has(entry.sessionId)),
     ];
+    if (rows.length === 0) return rows;
+    const [desktopProject, nativeRoots] = await Promise.all([
+      readCodexDesktopProjects(this.#codexHome()),
+      projectIds.size > 0 ? this.listProjects() : [],
+    ]);
+    const nativeProjects = new Map<string, NonNullable<AgentSessionSummary["codexProject"]>>();
+    for (const { projectId, name, cwd } of nativeRoots) {
+      if (projectId !== undefined && !nativeProjects.has(projectId)) nativeProjects.set(projectId, { projectId, name, cwd });
+    }
+    return rows.map(entry => {
+      const id = projectIds.get(entry.sessionId);
+      const desktop = desktopProject(entry.sessionId);
+      const projectId = id ?? desktop?.projectId;
+      const codexProject = projectId === undefined ? undefined
+        : nativeProjects.get(projectId) ?? (desktop?.projectId === projectId ? desktop : undefined);
+      return codexProject === undefined ? entry : { ...entry, codexProject };
+    });
+  }
+
+  #codexHome(): string {
+    return this.#options.rolloutRoot === undefined ? process.env.CODEX_HOME || join(homedir(), ".codex") : dirname(this.#options.rolloutRoot);
   }
 
   /** 扫磁盘 rollout 目录。同名会话（fork/重复）取 modifiedAt 最新的那份。 */
   async #diskCatalog(archived = false): Promise<AgentSessionSummary[]> {
-    const sessionsRoot = this.#options.rolloutRoot ?? join(homedir(), ".codex", "sessions");
+    const sessionsRoot = this.#options.rolloutRoot ?? join(this.#codexHome(), "sessions");
     const root = archived ? join(dirname(sessionsRoot), "archived_sessions") : sessionsRoot;
     let names: string[];
     try {
@@ -2131,7 +2163,7 @@ export class CodexRuntime implements AgentBackend {
    */
   async #replayFromRollout(thread: ThreadState, retainedTurns: Set<string>): Promise<void> {
     const generation = thread.reconcileGeneration;
-    const root = this.#options.rolloutRoot ?? join(homedir(), ".codex", "sessions");
+    const root = this.#options.rolloutRoot ?? join(this.#codexHome(), "sessions");
     let paths: string[];
     try {
       paths = thread.rolloutPath === undefined

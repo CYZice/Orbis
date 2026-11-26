@@ -35,7 +35,6 @@ internal class DrawerCatalogRequest(val state: RemoteState?, val language: AppLa
 
     override fun equals(other: Any?): Boolean = other is DrawerCatalogRequest && sameView(other) && prepared === other.prepared &&
         state?.hostName == other.state?.hostName && state?.sessions === other.state?.sessions &&
-        state?.nativeCodexProjects === other.state?.nativeCodexProjects &&
         state?.runtimes === other.state?.runtimes && state?.sessionGraphs === other.state?.sessionGraphs &&
         state?.catalogQuery === other.state?.catalogQuery &&
         state?.conversations === other.state?.conversations && state?.ledger === other.state?.ledger

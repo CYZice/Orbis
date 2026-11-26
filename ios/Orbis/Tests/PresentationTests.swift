@@ -155,15 +155,16 @@ struct PresentationTests {
     }
 
     @Test func codexDirectoriesFollowNativeProjectsAndCollectUnassignedChats() {
-        var projectChat = session("project", cwd: "D:\\Work\\Orbis")
+        var projectChat = session("project", cwd: "D:/worktree/orbis")
+        projectChat.codexProject = CodexSessionProject(projectId: "orbis-project", name: "Orbis", cwd: "D:/work/orbis")
         projectChat.modifiedAt = 30
-        var unassigned = session("unassigned", cwd: "D:/Notes")
+        var unassigned = session("unassigned", cwd: "D:/work/orbis")
         unassigned.modifiedAt = 20
         let directories = sessionDirectories([projectChat, unassigned], query: "", kind: nil, archived: false,
-                                             title: { $0.name ?? "" },
-                                             nativeProjects: [NativeCodexProject(cwd: "d:/work/orbis", name: "Orbis")])
+                                             title: { $0.name ?? "" })
         #expect(directories.count == 2)
         #expect(directories.first?.label == "Orbis")
+        #expect(directories.first?.projectId == "orbis-project")
         #expect(directories.first?.sessions.map(\.sessionId) == ["project"])
         #expect(directories.last?.isUnassignedCodex == true)
         #expect(directories.last?.label == "无项目的聊天")

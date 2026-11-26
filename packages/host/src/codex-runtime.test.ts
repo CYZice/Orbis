@@ -7,7 +7,7 @@ import { testDirectorySync } from "../../../scripts/test-fixtures/temp-directory
  */
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -91,7 +91,8 @@ function makeHarness(options?: {
   } as unknown as CodexAppServer;
   // 磁盘 rollout 扫描指向空临时目录：既不让测试读到本机真实的 ~/.codex/sessions，
   // 又给磁盘目录用例一个可写入的根。
-  const rolloutRoot = testDirectorySync(join(tmpdir(), "orbis-codex-rollout-"));
+  const rolloutRoot = join(testDirectorySync(join(tmpdir(), "orbis-codex-rollout-")), "sessions");
+  mkdirSync(rolloutRoot);
   const runtime = new CodexRuntime({
     server,
     onEvent: (event) => events.push(event),
@@ -1774,6 +1775,35 @@ describe("CodexRuntime", () => {
     const unsupported = h.runtime.listProjects();
     h.rejectNext(new Error("method not found"));
     expect(await unsupported).toEqual([]);
+  });
+
+  it("publishes explicit native and local Desktop project membership without inferring from cwd", async () => {
+    const h = makeHarness({ desktop: true });
+    const ids = ["native", "desktop", "same-cwd", "removed", "remote"];
+    h.runtime.seedDesktopThreads(ids);
+    writeFileSync(join(dirname(h.rolloutRoot), ".codex-global-state.json"), JSON.stringify({
+      "local-projects": { legacy: { name: "Orbis", rootPaths: ["D:/work/orbis"] } },
+      "thread-project-assignments": Object.fromEntries(["desktop", "removed", "remote"].map(id =>
+        [id, { projectKind: "local", projectId: "legacy" }])),
+      "thread-project-membership-host-ids": { desktop: "local", remote: "other-host" },
+      "projectless-thread-ids": ["removed"],
+      "app-server-project-id-by-legacy-project-id-by-host": { "local:C:": { legacy: "p1" } },
+    }));
+    const row = { cwd: "D:/work/orbis", createdAt: 100, updatedAt: 200, projectId: null };
+    const pending = h.runtime.catalog();
+    h.resolveNext({ data: [{ ...row, id: "same-cwd" }], nextCursor: "page2" });
+    await vi.waitFor(() => expect(h.requests).toHaveBeenCalledWith("thread/list", expect.objectContaining({ cursor: "page2" })));
+    h.resolveNext({ data: ids.filter(id => id !== "same-cwd").map(id => ({ ...row, id,
+      ...(id === "native" ? { cwd: "D:/worktree/other", projectId: "p1" } : {}),
+    })) });
+    await vi.waitFor(() => expect(h.requests).toHaveBeenCalledWith("project/list", expect.anything()));
+    h.resolveNext({ data: [{ id: "p1", name: "Orbis", roots: [{ path: "D:/work/orbis" }] }] });
+    const rows = await pending;
+    expect(rows.map(({ sessionId, codexProject }) => [sessionId, codexProject?.projectId])).toEqual([
+      ["codex-desktop:same-cwd", undefined], ["codex-desktop:native", "p1"], ["codex-desktop:desktop", "p1"],
+      ["codex-desktop:removed", undefined], ["codex-desktop:remote", undefined],
+    ]);
+    expect(rows[1]?.codexProject).toEqual({ projectId: "p1", name: "Orbis", cwd: "D:/work/orbis" });
   });
 
   it("catalog：thread/list 的结果映射成 agentKind=codex 的目录条目（Unix 秒 → 毫秒）", async () => {

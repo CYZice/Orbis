@@ -61,16 +61,16 @@ class CachedHistoryTreeTest {
 
     @Test
     fun `Codex sessions use named native projects and share one no-project group`() {
+        val project = CodexSessionProject("orbis-project", "Orbis", "D:/work/orbis")
         val state = RemoteState(
             hostId = "paired-host",
             hostName = "devbox",
             sessions = mapOf(
-                "project-1" to session("project-1", "D:/work/orbis", 30).copy(agentKind = "codex"),
-                "project-2" to session("project-2", "d:\\work\\orbis", 20).copy(agentKind = "codex"),
-                "unassigned-1" to session("unassigned-1", "D:/notes", 10).copy(agentKind = "codex"),
+                "project-1" to session("project-1", "D:/worktree/orbis", 30).copy(agentKind = "codex", codexProject = project),
+                "project-2" to session("project-2", "d:\\work\\orbis", 20).copy(agentKind = "codexDesktop", codexProject = project),
+                "unassigned-1" to session("unassigned-1", "D:/work/orbis", 10).copy(agentKind = "codex"),
                 "unassigned-2" to session("unassigned-2", "D:/scratch", 5).copy(agentKind = "codex"),
             ),
-            nativeCodexProjects = listOf(NativeCodexProject("D:\\work\\orbis", "Orbis")),
         )
 
         val directories = cachedHistoryTree(state).single().directories
@@ -79,6 +79,10 @@ class CachedHistoryTreeTest {
         assertEquals(setOf("unassigned-1", "unassigned-2"), directories.first { it.isUnassignedCodex }.sessions.map { it.sessionId }.toSet())
         assertEquals("无项目的聊天", directories.first { it.isUnassignedCodex }.label)
         assertEquals(2, directories.size)
+        val projectGroup = directories.single { it.projectId == project.projectId }
+        assertEquals(project.cwd, projectGroup.cwd)
+        assertEquals(project, json.decodeFromString(SessionCatalogEntry.serializer(),
+            """{"sessionId":"project-1","cwd":"D:/worktree/orbis","agentKind":"codex","codexProject":{"projectId":"orbis-project","name":"Orbis","cwd":"D:/work/orbis"}}""").codexProject)
     }
 
     @Test
