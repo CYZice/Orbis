@@ -627,8 +627,13 @@ int main(int argc, char *argv[]) {
                             auto *scroll = window->findChild<QObject *>("pageScroll");
                             auto *viewport = scroll ? scroll->property("contentItem").value<QObject *>() : nullptr;
                             if (!button || !button->isEnabled() || !viewport) { app.exit(86); return; }
-                            auto *versions = window->findChild<QObject *>("claudeVersions");
-                            if (!versions || versions->property("text").toString() != "当前 2.1.286，最新 2.1.325，有可用更新") { app.exit(89); return; }
+                            auto *versions = findVisualItem(window->contentItem(), "claudeVersions");
+                            const auto versionText = versions ? versions->property("text").toString() : QStringLiteral("<missing>");
+                            if (versionText != "当前 2.1.286，最新 2.1.325，有可用更新") {
+                                qWarning() << "Unexpected Claude version text in Agent smoke test:" << versionText;
+                                app.exit(89);
+                                return;
+                            }
                             viewport->setProperty("contentY", qMax(0.0, viewport->property("contentHeight").toReal() - viewport->property("height").toReal()));
                             QTest::qWait(80);
                             if (parser.isSet("screenshot") && !window->grabWindow().save(parser.value("screenshot") + ".claude-card.png")) { app.exit(7); return; }

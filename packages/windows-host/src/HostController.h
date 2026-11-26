@@ -235,7 +235,10 @@ public:
 #ifdef ORBIS_SMOKE_INTERACTION
     // Smoke-only (--smoke-test --smoke-guide): synthetic bridge lines go through the real reducer so the
     // guided overview renders each step without activating, connecting or pairing anything.
-    void smokeReceive(const QJsonObject &line) { receiveLine(line); }
+    void smokeReceive(const QJsonObject &line) {
+        if (line.value("event").toString() == "claudeStatus") m_smokeOverridesClaudeStatus = true;
+        receiveLine(line);
+    }
     void smokeActivation(bool running) { m_credential = "orbis_host_smoke"; m_desiredRunning = running; emit changed(); }
     void smokeAgents(const QVariantList &agents) { m_agents = agents; emit changed(); }
     void smokePauseForChange() { pauseForChange(); emit changed(); }
@@ -348,6 +351,9 @@ private:
     /** 按提交顺序记录每个在途请求的可读说明，界面只展示最靠前的那条。 */
     QHash<int, QPair<QString, QString>> m_activity;
     QList<int> m_activityOrder;
+#ifdef ORBIS_SMOKE_INTERACTION
+    bool m_smokeOverridesClaudeStatus = false;
+#endif
     bool m_claudeDetecting = false;
     int m_draftGeneration = 0;
     QString m_state = "stopped", m_message, m_email, m_hostName, m_hostId, m_credential, m_qr, m_appDownloadQr, m_iosAppDownloadQr, m_challenge, m_challengeEmail;

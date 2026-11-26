@@ -146,7 +146,13 @@ HostController::HostController(QString runtimeRoot, QString dataDir, QString hos
         while ((newline = m_stdout.indexOf('\n')) >= 0) {
             const auto line = m_stdout.left(newline); m_stdout.remove(0, newline + 1);
             const auto document = QJsonDocument::fromJson(line);
-            if (document.isObject()) receiveLine(document.object());
+            if (!document.isObject()) continue;
+            const auto message = document.object();
+#ifdef ORBIS_SMOKE_INTERACTION
+            // Once the smoke fixture drives the card, real version checks must not replace it.
+            if (m_smokeOverridesClaudeStatus && message.value("event").toString() == "claudeStatus") continue;
+#endif
+            receiveLine(message);
         }
     });
     connect(&m_bridge, &QProcess::readyReadStandardError, this, [this] { appendLog(QString::fromUtf8(m_bridge.readAllStandardError()).trimmed()); });
