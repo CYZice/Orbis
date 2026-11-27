@@ -35,6 +35,15 @@ const CATALOG_INVENTORY_ENTRIES = 20_000;
 type CatalogInput = Omit<HostCatalogState, "checkedAt">;
 type CatalogInventory = { snapshotId: string; modelEpoch: string; fingerprint: string; state: CatalogInput; sessions: AgentSessionSummary[] };
 
+function isCodexCatalogRow(row: AgentSessionSummary): boolean {
+  return row.agentKind === "codex" || row.agentKind === "codexDesktop";
+}
+
+function catalogGroup(row: AgentSessionSummary): string {
+  if (!isCodexCatalogRow(row)) return row.cwd;
+  return `\0codex:${row.codexProject?.projectId ?? ""}`;
+}
+
 /** Binary search keeps truncation work logarithmic even for thousands of long catalog entries. */
 function boundedArray<T>(items: readonly T[], bytes: number, wrap: (items: T[]) => unknown): T[] {
   const size = (count: number) => Buffer.byteLength(JSON.stringify(wrap(items.slice(0, count))));
@@ -229,8 +238,8 @@ export class HostStateFacts {
     }
     const limit = Number.isSafeInteger(request.limit) ? Math.max(1, Math.min(200, request.limit!)) : 100;
     const totals = new Map<string, number>();
-    if (query) for (const row of matched) totals.set(row.cwd, (totals.get(row.cwd) ?? 0) + 1);
-    const candidates = matched.slice(offset, offset + limit).map(row => query ? { ...row, directoryTotal: totals.get(row.cwd)! } : row);
+    if (query) for (const row of matched) totals.set(catalogGroup(row), (totals.get(catalogGroup(row)) ?? 0) + 1);
+    const candidates = matched.slice(offset, offset + limit).map(row => query && !isCodexCatalogRow(row) ? { ...row, directoryTotal: totals.get(catalogGroup(row))! } : row);
     const sessions = boundedArray(candidates, CATALOG_PAGE_VALUE_BYTES, items => ({ sessions: items }));
     // One valid public row can exceed the 28 KiB target (e.g. escaped Unicode paths).
     // It still fits the 64 KiB hard page; never produce a cursor that points to itself.
@@ -303,10 +312,10 @@ export class HostStateFacts {
     // Facets describe this immutable source inventory; loaded rows and global matches are separate.
     const groups = page.error ? [] : this.#catalogMatches(request.query, inventory);
     const counts = new Map<string, number>();
-    for (const row of groups) counts.set(row.cwd, (counts.get(row.cwd) ?? 0) + 1);
+    for (const row of groups) counts.set(catalogGroup(row), (counts.get(catalogGroup(row)) ?? 0) + 1);
     const previewCount = [...counts.values()].reduce((sum, count) => sum + Math.min(5, count), 0);
     return { type: "session.catalog.page", requestId: request.requestId, format: "v1", query: request.query, page,
-      directoryCount: new Set(groups.map(row => row.cwd)).size,
+      directoryCount: counts.size,
       previewsComplete: page.offset + page.sessions.length >= previewCount,
       ...(request.cursor ? {} : { providers, unknownProvider: rows.some(row => !row.modelProvider), providersTruncated: providers.length < all.length }) };
   }
@@ -316,17 +325,18 @@ export class HostStateFacts {
     const text = searchKey(query.text.trim());
     const matched = inventory?.sessions.filter(session =>
       (query.agentKind === null || session.agentKind === query.agentKind) && (session.archived === true) === query.archived &&
-      (!query.directory || createHash("sha256").update(session.cwd).digest("hex") === query.directory) &&
+      (!query.directory || !isCodexCatalogRow(session) && createHash("sha256").update(session.cwd).digest("hex") === query.directory) &&
       (!text || [session.cwd, session.codexProject?.name ?? "", session.codexProject?.cwd ?? "", session.name ?? "", session.firstMessage ?? "", session.sessionId].some(value => searchKey(value).includes(text))) &&
       (query.agentKind !== "codex" && query.agentKind !== "codexDesktop" || query.provider === "all" ||
         query.provider === "current" && current !== undefined && session.modelProvider === current ||
         query.provider === "unknown" && !session.modelProvider || query.provider.startsWith("provider:") && session.modelProvider === query.provider.slice(9))) ?? [];
     if (query.directory) return matched;
-    // Surface directory headers and their five-row previews before hidden older rows.
-    // Expanding a directory uses its exact path hash instead of downloading other groups.
+    // Send each sidebar group’s first row before spending the page budget on extra previews.
     const groups = new Map<string, AgentSessionSummary[]>();
-    for (const row of matched) { const group = groups.get(row.cwd) ?? []; group.push(row); groups.set(row.cwd, group); }
-    return [...[...groups.values()].flatMap(rows => rows.slice(0, 5)), ...[...groups.values()].flatMap(rows => rows.slice(5))];
+    for (const row of matched) { const key = catalogGroup(row); const group = groups.get(key) ?? []; group.push(row); groups.set(key, group); }
+    const branches = [...groups.values()];
+    const previews = Array.from({ length: 5 }, (_, index) => branches.flatMap(rows => rows.slice(index, index + 1))).flat();
+    return [...previews, ...branches.flatMap(rows => rows.slice(5))];
   }
 
   /**

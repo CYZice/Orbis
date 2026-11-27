@@ -4601,6 +4601,49 @@ describe("Codex 虚拟 runtime 接线（spec §7.4 的 M4 验收）", () => {
     expect(listRequests).toHaveLength(2);
   });
 
+  it("sends the Codex project and projectless groups together on the paired device's first catalog page", async () => {
+    stateDir = await mkdtemp(join(tmpdir(), "orbis-codex-project-catalog-"));
+    relay = await startRelayLocal(stateDir);
+    const cwd = "D:/Desktop/新建文件夹";
+    await writeFile(join(stateDir, ".codex-global-state.json"), JSON.stringify({
+      "projectless-thread-ids": ["same-root-projectless"],
+    }));
+    const rows = [
+      { id: "same-root-projectless", cwd, updatedAt: 3 },
+      ...Array.from({ length: 25 }, (_, i) => ({ id: `standalone-${i}`, cwd: `D:/Documents/Codex/2026-11-27/chat-${i}`, updatedAt: 2 })),
+      { id: "project-chat", cwd, updatedAt: 1 },
+    ];
+    const runtime = new CodexRuntime({
+      server: { mode: "owned", notify: vi.fn(), request: vi.fn(async (method: string, params?: { archived?: boolean }) => {
+        if (method === "thread/list") return { data: params?.archived ? [] : rows.map(row => ({ ...row, createdAt: 1 })) };
+        if (method === "config/read") return { config: {} };
+        throw new Error(`unexpected ${method}`);
+      }) } as unknown as CodexAppServer,
+      onEvent: () => {}, rolloutRoot: join(stateDir, "sessions"),
+    });
+    host = await HostService.create({ relayUrl: relay.url, ...relayBusinessHostOptions(relay.url), credential: "runtime-secret",
+      adminToken: "owner-secret", stateDir, reconnect: false, lan: false, codexRuntime: runtime,
+      sessionsRoot: join(stateDir, "no-pi-sessions") });
+    await host.start();
+    device = await readyDeviceLocal({ host, relay });
+    const next = async (requestId: string) => {
+      for (let i = 0; i < 40; i++) {
+        const message = await device!.receiveMessage();
+        if (message.requestId === requestId) return message;
+      }
+      throw new Error(`Missing catalog reply: ${requestId}`);
+    };
+    sendRequest(device, { type: "session.catalog.capabilities.request", protocolVersion: PROTOCOL_VERSION, requestId: "caps" });
+    await next("caps");
+    sendRequest(device, { type: "session.catalog.query", protocolVersion: PROTOCOL_VERSION, requestId: "first-page", format: "v1",
+      query: { text: "", archived: false, agentKind: null, provider: "all" }, cursor: null, limit: 2 });
+    const page = await next("first-page") as unknown as CatalogQueryPage;
+    expect(page).toMatchObject({ type: "session.catalog.page", directoryCount: 2, page: { totalSessions: rows.length } });
+    expect(page.page.sessions.map(row => [row.sessionId, row.codexProject])).toEqual([
+      ["same-root-projectless", undefined], ["project-chat", { projectId: expect.stringMatching(/^cwd:/u), name: "新建文件夹", cwd }],
+    ]);
+  });
+
   it("keeps terminal and desktop Codex identities separate over the device protocol", async () => {
     stateDir = await mkdtemp(join(tmpdir(), "orbis-dual-codex-host-"));
     relay = await startRelayLocal(stateDir);

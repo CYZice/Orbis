@@ -1549,7 +1549,7 @@ export class CodexRuntime implements AgentBackend {
     }
     return rows.map(entry => {
       const id = projectIds.get(entry.sessionId);
-      const desktop = desktopProject(entry.sessionId);
+      const desktop = desktopProject(entry.sessionId, entry.cwd);
       const projectId = id ?? desktop?.projectId;
       const codexProject = projectId === undefined ? undefined
         : nativeProjects.get(projectId) ?? (desktop?.projectId === projectId ? desktop : undefined);

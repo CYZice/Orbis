@@ -1777,33 +1777,43 @@ describe("CodexRuntime", () => {
     expect(await unsupported).toEqual([]);
   });
 
-  it("publishes explicit native and local Desktop project membership without inferring from cwd", async () => {
+  it("publishes native assignments and Desktop root scopes without grouping projectless outputs", async () => {
     const h = makeHarness({ desktop: true });
-    const ids = ["native", "desktop", "same-cwd", "removed", "remote"];
+    const ids = ["native", "desktop", "same-cwd", "child", "sibling", "removed", "remote", "output", "output-hint", "secondary", "calculus", "calculus-alias"];
     h.runtime.seedDesktopThreads(ids);
     writeFileSync(join(dirname(h.rolloutRoot), ".codex-global-state.json"), JSON.stringify({
-      "local-projects": { legacy: { name: "Orbis", rootPaths: ["D:/work/orbis"] } },
+      "local-projects": { legacy: { name: "Orbis", rootPaths: ["D:/work/orbis", "D:/other"] }, documents: { name: "Documents", rootPaths: ["D:/Documents"] } },
       "thread-project-assignments": Object.fromEntries(["desktop", "removed", "remote"].map(id =>
         [id, { projectKind: "local", projectId: "legacy" }])),
       "thread-project-membership-host-ids": { desktop: "local", remote: "other-host" },
-      "projectless-thread-ids": ["removed"],
+      "projectless-thread-ids": ["removed", "calculus-alias"],
+      "electron-owner-value:thread-projectless-output-directories:owner": { "output-hint": "D:/elsewhere" },
       "app-server-project-id-by-legacy-project-id-by-host": { "local:C:": { legacy: "p1" } },
     }));
     const row = { cwd: "D:/work/orbis", createdAt: 100, updatedAt: 200, projectId: null };
     const pending = h.runtime.catalog();
     h.resolveNext({ data: [{ ...row, id: "same-cwd" }], nextCursor: "page2" });
     await vi.waitFor(() => expect(h.requests).toHaveBeenCalledWith("thread/list", expect.objectContaining({ cursor: "page2" })));
-    h.resolveNext({ data: ids.filter(id => id !== "same-cwd").map(id => ({ ...row, id,
-      ...(id === "native" ? { cwd: "D:/worktree/other", projectId: "p1" } : {}),
+    const cwd = new Map([["native", "D:/worktree/other"], ["child", "d:\\WORK\\ORBIS\\nested"], ["sibling", "D:/work/orbis-other"],
+      ["output", "D:/Documents/Codex/2026-11-27/conversation/outputs"], ["secondary", "D:/other/nested"],
+      ["calculus", "C:/Users/Example/Desktop/新建文件夹"], ["calculus-alias", "C:/Users/Example/Desktop/新建文件夹"]]);
+    h.resolveNext({ data: ids.filter(id => id !== "same-cwd").map(id => ({ ...row, id, cwd: cwd.get(id) ?? row.cwd,
+      ...(id === "native" ? { projectId: "p1" } : {}),
     })) });
     await vi.waitFor(() => expect(h.requests).toHaveBeenCalledWith("project/list", expect.anything()));
     h.resolveNext({ data: [{ id: "p1", name: "Orbis", roots: [{ path: "D:/work/orbis" }] }] });
     const rows = await pending;
     expect(rows.map(({ sessionId, codexProject }) => [sessionId, codexProject?.projectId])).toEqual([
-      ["codex-desktop:same-cwd", undefined], ["codex-desktop:native", "p1"], ["codex-desktop:desktop", "p1"],
-      ["codex-desktop:removed", undefined], ["codex-desktop:remote", undefined],
+      ["codex-desktop:same-cwd", "p1"], ["codex-desktop:native", "p1"], ["codex-desktop:desktop", "p1"],
+      ["codex-desktop:child", "p1"], ["codex-desktop:sibling", expect.stringMatching(/^cwd:/u)], ["codex-desktop:removed", undefined],
+      ["codex-desktop:remote", undefined], ["codex-desktop:output", undefined], ["codex-desktop:output-hint", undefined],
+      ["codex-desktop:secondary", "p1"], ["codex-desktop:calculus", expect.stringMatching(/^cwd:/u)],
+      ["codex-desktop:calculus-alias", undefined],
     ]);
     expect(rows[1]?.codexProject).toEqual({ projectId: "p1", name: "Orbis", cwd: "D:/work/orbis" });
+    expect(rows.find(row => row.sessionId === "codex-desktop:calculus")?.codexProject).toMatchObject({
+      name: "新建文件夹", cwd: "C:/Users/Example/Desktop/新建文件夹",
+    });
   });
 
   it("catalog：thread/list 的结果映射成 agentKind=codex 的目录条目（Unix 秒 → 毫秒）", async () => {

@@ -24,6 +24,33 @@ class CatalogViewReadsTest {
         assertTrue(loader.consume(buildJsonObject { put("type", "session.catalog.capabilities"); put("requestId", sent.last()["requestId"]!!); put("format", "v1") }))
     }
 
+    @Test fun `first catalog page moves a cached Codex chat to its named project`() {
+        val sent = mutableListOf<JsonObject>()
+        val cwd = "D:/registered-project"
+        val stale = SessionCatalogEntry("project-chat", cwd = cwd, agentKind = "codex", hasHistoryCache = true)
+        var state = RemoteState(hostId = "paired-host", hostName = "devbox", sessions = mapOf(stale.sessionId to stale))
+        val loader = CatalogViewReads({ sent += it; true }, { result, rows ->
+            state = state.copy(catalogQuery = result, sessions = state.sessions + rows.associate { entry ->
+                entry.sessionId to entry.copy(hasHistoryCache = state.sessions[entry.sessionId]?.hasHistoryCache == true)
+            })
+        })
+        enable(loader, sent); loader.setView(CatalogQuery())
+        val reply = page(sent.last(), emptyList(), next = null)
+        val rows = JsonArray(listOf(
+            buildJsonObject { put("sessionId", "same-root-projectless"); put("agentKind", "codex"); put("cwd", cwd) },
+            buildJsonObject {
+                put("sessionId", "project-chat"); put("agentKind", "codex"); put("cwd", cwd)
+                put("codexProject", buildJsonObject { put("projectId", "project"); put("name", "Registered project"); put("cwd", cwd) })
+            },
+        ))
+        assertTrue(loader.consume(JsonObject(reply + mapOf("directoryCount" to JsonPrimitive(2),
+            "page" to JsonObject(reply.getValue("page").jsonObject + ("sessions" to rows))))))
+        val directories = cachedHistoryTree(state).single().directories
+        assertEquals(listOf("project-chat"), directories.single { it.label == "Registered project" }.sessions.map { it.sessionId })
+        assertEquals(listOf("same-root-projectless"), directories.single { it.isUnassignedCodex }.sessions.map { it.sessionId })
+        assertTrue(state.sessions.getValue("project-chat").hasHistoryCache)
+    }
+
     // SC-01/04: opening and scrolling own demand; a response alone must not download the
     // rest, and neither a closed view nor a replaced query may accept a delayed page.
     @Test fun `pages require visible demand and retain exact query ownership`() {

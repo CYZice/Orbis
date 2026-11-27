@@ -17,6 +17,27 @@ const setup = () => {
 };
 
 describe("Host catalog immutable ranges", () => {
+  it("puts Codex projects on the first bounded page instead of previewing each projectless cwd", () => {
+    const { facts } = setup();
+    const codexProject = { projectId: "orbis", name: "Orbis", cwd: "D:/repo" };
+    const project = session(200, { agentKind: "codex", codexProject, modifiedAt: 2 });
+    const worktree = session(201, { agentKind: "codexDesktop", codexProject, cwd: "D:/other-worktree", modifiedAt: 1 });
+    const chats = Array.from({ length: 100 }, (_, n) => session(n, {
+      agentKind: "codex", cwd: `D:/chat-${n}`, modifiedAt: 200 - n, firstMessage: "x".repeat(3500),
+    }));
+    const pi = session(202, { cwd: project.cwd });
+    const rows = [...chats, project, worktree, pi];
+    facts.catalog({ sessions: rows, totalSessions: rows.length, truncated: false,
+      backends: [backend(101, { kind: "codex" }), backend(1, { kind: "codexDesktop" }), backend(1)] });
+    const request = { type: "session.catalog.query" as const, requestId: "groups", format: "v1" as const,
+      query: { text: "", agentKind: null, archived: false, provider: "all" }, cursor: null, limit: 3 };
+    const first = CatalogQueryPageSchema.parse(facts.catalogQuery(request));
+    expect(first.directoryCount).toBe(3);
+    expect(first.page.sessions).toEqual([chats[0], project, { ...pi, directoryTotal: 1 }]);
+    const piDirectory = createHash("sha256").update(project.cwd).digest("hex");
+    expect(facts.catalogQuery({ ...request, query: { ...request.query, directory: piDirectory } }).page.sessions)
+      .toEqual([{ ...pi, directoryTotal: 1 }]);
+  });
   // FT-G11-PREVIEW-01: backend enumeration order must not hide recent metadata
   // behind a completed directory preview; byte-limited continuations stay lossless.
   it("previews the newest sessions across backends within the Android page budget", () => {
@@ -35,7 +56,7 @@ describe("Host catalog immutable ranges", () => {
     expect(first.previewsComplete).toBe(true);
     expect(first.page.sessions.length).toBeLessThan(request.limit);
     expect(first.page.nextCursor).not.toBeNull();
-    expect(first.page.sessions[0]).toEqual({ ...newest, directoryTotal: all.length });
+    expect(first.page.sessions[0]).toEqual(newest);
     const received = [...first.page.sessions];
     let page = first;
     while (true) {
@@ -45,7 +66,7 @@ describe("Host catalog immutable ranges", () => {
       expect(page.page.offset).toBe(received.length);
       received.push(...page.page.sessions);
     }
-    expect(received).toEqual([newest, ...older].map(row => ({ ...row, directoryTotal: all.length })));
+    expect(received).toEqual([newest, ...older.map(row => ({ ...row, directoryTotal: older.length }))]);
   });
 
   // FT-G11-COMPAT-01 / DSH-DESKTOP-06: query negotiation does not grant Desktop visibility;
@@ -83,7 +104,7 @@ describe("Host catalog immutable ranges", () => {
       query: { text: "", agentKind: null, archived: false, provider: "all" }, cursor: null, limit: 10 };
     const preview = facts.catalogQuery(request);
     expect(preview.previewsComplete).toBe(true); expect(preview.directoryCount).toBe(2);
-    expect(preview.page.sessions.map(row => row.cwd)).toEqual([...Array(5).fill("/hot"), ...Array(5).fill("/cold")]);
+    expect(preview.page.sessions.map(row => row.cwd)).toEqual(Array.from({ length: 5 }, () => ["/hot", "/cold"]).flat());
     expect(preview.page.sessions[0]?.directoryTotal).toBe(180);
     const directory = createHash("sha256").update("/cold").digest("hex");
     const expanded = facts.catalogQuery({ ...request, query: { ...request.query, directory }, limit: 100 });
@@ -114,7 +135,7 @@ describe("Host catalog immutable ranges", () => {
     const query: CatalogQuery = { text: "NEEDLE", agentKind: "codex", archived: false, provider: "all" };
     const request = { type: "session.catalog.query" as const, format: "v1" as const, requestId: "q", query, cursor: null, limit: 100 };
     const first = CatalogQueryPageSchema.parse(facts.catalogQuery(request));
-    expect(first.page.totalSessions).toBe(249); expect(first.directoryCount).toBe(249);
+    expect(first.page.totalSessions).toBe(249); expect(first.directoryCount).toBe(1);
     expect(first.providers).toEqual(["current", "other"]);
     expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThan(64 * 1024);
     const rows = [...first.page.sessions]; let cursor = first.page.nextCursor;
