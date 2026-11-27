@@ -285,7 +285,7 @@ internal fun SessionDrawer(
     var showAllDirectories by rememberSaveable(viewportIdentity) { mutableStateOf(false) }
     val expandedDirectory = sections.asSequence().flatMap { section -> section.directories.asSequence()
         .map { section.hostId + '\u0000' + it.key to it } }.firstOrNull { it.first == expandedKey }?.second
-    val expandedDirectoryPath = expandedDirectory?.takeIf { it.projectId == null && !it.isUnassignedCodex }?.cwd
+    val expandedDirectoryPath = expandedDirectory?.directoryQueryPath
     val networkQuery = CatalogQuery(searchTerm.take(256), agentFilterKey.takeUnless { it == "all" }, showArchived,
         requestedProviderKey.takeIf { agentFilter.hasProviderFilter } ?: "all",
         directory = expandedDirectoryPath?.takeIf { showAllSessions }?.let(::catalogDirectoryId))
@@ -310,7 +310,7 @@ internal fun SessionDrawer(
         sections.flatMap { section -> section.directories.map { directory ->
             val branchKey = section.hostId + '\u0000' + directory.key
             val expanded = branchKey == expandedKey
-            val queryDirectory = directory.takeUnless { it.isUnassignedCodex || it.projectId != null }?.cwd
+            val queryDirectory = directory.directoryQueryPath
             DrawerDirectoryItems(section.hostId, directory, branchKey, expanded,
                 if (expanded && (showAllSessions || searchTerm.isNotEmpty())) directory.sessions else directory.sessions.take(3),
                 maxOf(directory.sessions.size, queryDirectory?.let { queryResult?.directoryTotals?.get(it) } ?: 0) > 3 && searchTerm.isEmpty())
@@ -742,7 +742,11 @@ private fun DrawerDirectoryHeader(directory: CachedDirectoryGroup, expanded: Boo
         shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp), shadowScale = 0.4f, onClick = onClick, flat = true) {
         Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(if (expanded) OrbisSymbols.FolderFill else OrbisSymbols.Folder, null, modifier = Modifier.size(20.dp),
+            Icon(when {
+                directory.isRecentCodex -> OrbisSymbols.History
+                expanded -> OrbisSymbols.FolderFill
+                else -> OrbisSymbols.Folder
+            }, null, modifier = Modifier.size(20.dp),
                 tint = if (expanded) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
             Text((directory.label ?: directoryDisplayName(directory.cwd)).ifBlank { L10n.tr("未记录目录") }, Modifier.weight(1f),
                 style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -754,8 +758,7 @@ private fun DrawerDirectoryHeader(directory: CachedDirectoryGroup, expanded: Boo
 }
 
 private fun drawerQueryTotal(directory: CachedDirectoryGroup, queryResult: CatalogQueryResult?): Int =
-    maxOf(directory.sessions.size, directory.takeIf { it.projectId == null && !it.isUnassignedCodex }
-        ?.cwd?.let { queryResult?.directoryTotals?.get(it) } ?: 0)
+    maxOf(directory.sessions.size, directory.directoryQueryPath?.let { queryResult?.directoryTotals?.get(it) } ?: 0)
 
 /** Navigation rows stay on the drawer face; only a press or current selection indents them. */
 @Composable

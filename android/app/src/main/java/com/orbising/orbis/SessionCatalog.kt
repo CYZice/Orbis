@@ -39,6 +39,7 @@ data class SessionCatalogEntry(
     /** Native Codex activity timestamp, if supplied by thread/list. */
     val recencyAt: Long? = null,
     val codexProject: CodexSessionProject? = null,
+    val codexSection: String? = null,
 )
 
 /** Loading history must not erase the host supplied by the session directory. */

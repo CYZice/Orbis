@@ -59,7 +59,7 @@ class DrawerCatalogCacheTest {
         val after = cache.get(next)
         assertNotSame(before, after)
         assertEquals(cachedHistoryTree(next), after)
-        assertEquals("无项目的聊天", after.single().directories.single().label)
+        assertEquals("最近", after.single().directories.single().label)
         assertEquals("Updated", after.single().directories.single().sessions.first { it.sessionId == "second" }.title)
     }
 

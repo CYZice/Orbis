@@ -60,7 +60,7 @@ class CachedHistoryTreeTest {
     }
 
     @Test
-    fun `Codex sessions use named native projects and share one no-project group`() {
+    fun `Codex sessions use named native projects and one Recent group`() {
         val project = CodexSessionProject("orbis-project", "Orbis", "D:/work/orbis")
         val state = RemoteState(
             hostId = "paired-host",
@@ -68,16 +68,19 @@ class CachedHistoryTreeTest {
             sessions = mapOf(
                 "project-1" to session("project-1", "D:/worktree/orbis", 30).copy(agentKind = "codex", codexProject = project),
                 "project-2" to session("project-2", "d:\\work\\orbis", 20).copy(agentKind = "codexDesktop", codexProject = project),
-                "unassigned-1" to session("unassigned-1", "D:/work/orbis", 10).copy(agentKind = "codex"),
-                "unassigned-2" to session("unassigned-2", "D:/scratch", 5).copy(agentKind = "codex"),
+                "unassigned-1" to session("unassigned-1", "D:/work/orbis", 10).copy(agentKind = "codex", codexSection = "projectless"),
+                "unassigned-2" to session("unassigned-2", "D:/scratch", 5).copy(agentKind = "codex", codexSection = "projectless"),
+                "other" to session("other", "D:/scratch", 4).copy(agentKind = "codex", codexSection = "other"),
+                "unknown" to session("unknown", "D:/scratch", 3).copy(agentKind = "codex"),
             ),
         )
 
         val directories = cachedHistoryTree(state).single().directories
 
         assertEquals(setOf("project-1", "project-2"), directories.first { it.label == "Orbis" }.sessions.map { it.sessionId }.toSet())
-        assertEquals(setOf("unassigned-1", "unassigned-2"), directories.first { it.isUnassignedCodex }.sessions.map { it.sessionId }.toSet())
-        assertEquals("无项目的聊天", directories.first { it.isUnassignedCodex }.label)
+        val recent = directories.single { it.isRecentCodex }
+        assertEquals(listOf("unassigned-1", "unassigned-2", "other", "unknown"), recent.sessions.map { it.sessionId })
+        assertEquals("最近", recent.label)
         assertEquals(2, directories.size)
         val projectGroup = directories.single { it.projectId == project.projectId }
         assertEquals(project.cwd, projectGroup.cwd)
@@ -183,7 +186,7 @@ class CachedHistoryTreeTest {
             val offline = RemoteState(hostId = "paired-host", hostName = "devbox", sessions = mapOf(entry.sessionId to cached))
             val host = cachedHistoryTree(offline).single()
             assertEquals("devbox", host.hostname)
-            assertEquals("无项目的聊天", host.directories.single().label)
+            assertEquals("最近", host.directories.single().label)
             assertEquals("", host.directories.single().cwd)
             val row = host.directories.single().sessions.single()
             assertEquals(entry.sessionId, row.sessionId)

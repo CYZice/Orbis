@@ -447,7 +447,7 @@ struct SessionDrawerView: View, Equatable {
         return VStack(spacing: 0) {
             OrbisMotionButton { toggle(directory.id) } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: expanded ? "folder.fill" : "folder").font(.system(size: 20)).frame(width: 20)
+                    Image(systemName: directory.isRecentCodex ? "clock" : (expanded ? "folder.fill" : "folder")).font(.system(size: 20)).frame(width: 20)
                         .foregroundStyle(expanded ? OrbisPalette(scheme).text : OrbisPalette(scheme).secondary)
                     Text((directory.label ?? directoryTitle(directory.path)).isEmpty ? L10n.tr("未记录目录") : (directory.label ?? directoryTitle(directory.path))).font(.orbisLabel(.semibold)).lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)

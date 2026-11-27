@@ -1547,14 +1547,20 @@ export class CodexRuntime implements AgentBackend {
     for (const { projectId, name, cwd } of nativeRoots) {
       if (projectId !== undefined && !nativeProjects.has(projectId)) nativeProjects.set(projectId, { projectId, name, cwd });
     }
-    return rows.map(entry => {
-      const id = projectIds.get(entry.sessionId);
-      const desktop = desktopProject(entry.sessionId, entry.cwd);
-      const projectId = id ?? desktop?.projectId;
-      const codexProject = projectId === undefined ? undefined
-        : nativeProjects.get(projectId) ?? (desktop?.projectId === projectId ? desktop : undefined);
-      return codexProject === undefined ? entry : { ...entry, codexProject };
-    });
+    const catalog: AgentSessionSummary[] = [];
+    for (let offset = 0; offset < rows.length; offset += 32) {
+      catalog.push(...await Promise.all(rows.slice(offset, offset + 32).map(async (entry): Promise<AgentSessionSummary> => {
+        const id = projectIds.get(entry.sessionId);
+        const native = id === undefined ? undefined : nativeProjects.get(id);
+        if (native) return { ...entry, codexProject: native };
+        const placement = await desktopProject(entry.sessionId, entry.cwd);
+        if (id !== undefined && (!("codexProject" in placement) || placement.codexProject.projectId !== id)) {
+          return { ...entry, codexSection: "other" };
+        }
+        return { ...entry, ...placement };
+      })));
+    }
+    return catalog;
   }
 
   #codexHome(): string {

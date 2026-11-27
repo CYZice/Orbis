@@ -420,6 +420,7 @@ struct SessionSummary: Codable, Hashable, Identifiable {
     var modelProvider: String? = nil
     var hostname: String? = nil
     var codexProject: CodexSessionProject? = nil
+    var codexSection: String? = nil
     var id: String { sessionId }
 }
 

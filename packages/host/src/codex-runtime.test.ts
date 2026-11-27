@@ -6,8 +6,9 @@ import { testDirectorySync } from "../../../scripts/test-fixtures/temp-directory
  * 验证 thread 列表 → 目录条目、turn/item 事件流 → runtime 事件、审批闭环。
  */
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -1783,7 +1784,7 @@ describe("CodexRuntime", () => {
     h.runtime.seedDesktopThreads(ids);
     writeFileSync(join(dirname(h.rolloutRoot), ".codex-global-state.json"), JSON.stringify({
       "local-projects": { legacy: { name: "Orbis", rootPaths: ["D:/work/orbis", "D:/other"] }, documents: { name: "Documents", rootPaths: ["D:/Documents"] } },
-      "thread-project-assignments": Object.fromEntries(["desktop", "removed", "remote"].map(id =>
+      "thread-project-assignments": Object.fromEntries(["desktop", "remote"].map(id =>
         [id, { projectKind: "local", projectId: "legacy" }])),
       "thread-project-membership-host-ids": { desktop: "local", remote: "other-host" },
       "projectless-thread-ids": ["removed", "calculus-alias"],
@@ -1795,7 +1796,8 @@ describe("CodexRuntime", () => {
     h.resolveNext({ data: [{ ...row, id: "same-cwd" }], nextCursor: "page2" });
     await vi.waitFor(() => expect(h.requests).toHaveBeenCalledWith("thread/list", expect.objectContaining({ cursor: "page2" })));
     const cwd = new Map([["native", "D:/worktree/other"], ["child", "d:\\WORK\\ORBIS\\nested"], ["sibling", "D:/work/orbis-other"],
-      ["output", "D:/Documents/Codex/2026-11-27/conversation/outputs"], ["secondary", "D:/other/nested"],
+      ["output", join(homedir(), "Documents", "Codex", "2026-11-27", "conversation", "outputs")], ["secondary", "D:/other/nested"],
+      ["output-hint", "D:/elsewhere"],
       ["calculus", "C:/Users/Example/Desktop/新建文件夹"], ["calculus-alias", "C:/Users/Example/Desktop/新建文件夹"]]);
     h.resolveNext({ data: ids.filter(id => id !== "same-cwd").map(id => ({ ...row, id, cwd: cwd.get(id) ?? row.cwd,
       ...(id === "native" ? { projectId: "p1" } : {}),
@@ -1805,15 +1807,111 @@ describe("CodexRuntime", () => {
     const rows = await pending;
     expect(rows.map(({ sessionId, codexProject }) => [sessionId, codexProject?.projectId])).toEqual([
       ["codex-desktop:same-cwd", "p1"], ["codex-desktop:native", "p1"], ["codex-desktop:desktop", "p1"],
-      ["codex-desktop:child", "p1"], ["codex-desktop:sibling", expect.stringMatching(/^cwd:/u)], ["codex-desktop:removed", undefined],
+      ["codex-desktop:child", "p1"], ["codex-desktop:sibling", undefined], ["codex-desktop:removed", undefined],
       ["codex-desktop:remote", undefined], ["codex-desktop:output", undefined], ["codex-desktop:output-hint", undefined],
-      ["codex-desktop:secondary", "p1"], ["codex-desktop:calculus", expect.stringMatching(/^cwd:/u)],
+      ["codex-desktop:secondary", "p1"], ["codex-desktop:calculus", undefined],
       ["codex-desktop:calculus-alias", undefined],
     ]);
     expect(rows[1]?.codexProject).toEqual({ projectId: "p1", name: "Orbis", cwd: "D:/work/orbis" });
-    expect(rows.find(row => row.sessionId === "codex-desktop:calculus")?.codexProject).toMatchObject({
-      name: "新建文件夹", cwd: "C:/Users/Example/Desktop/新建文件夹",
-    });
+    expect(rows.filter(row => row.codexSection === "projectless").map(row => row.sessionId)).toEqual([
+      "codex-desktop:removed", "codex-desktop:output", "codex-desktop:calculus-alias",
+    ]);
+    expect(rows.filter(row => row.codexSection === "other").map(row => row.sessionId)).toEqual([
+      "codex-desktop:sibling", "codex-desktop:remote", "codex-desktop:output-hint", "codex-desktop:calculus",
+    ]);
+  });
+
+  it("uses current Desktop SQLite membership even when the cwd is an old project folder", async () => {
+    const h = makeHarness({ desktop: true });
+    const home = dirname(h.rolloutRoot);
+    const oldRoot = "C:/Users/Example/Desktop/Old folder";
+    const root = "C:/Users/Example/Desktop/Calculus";
+    const ids = ["explicit", "under-root", "projectless", "unmatched", "cleared"];
+    h.runtime.seedDesktopThreads(ids);
+    writeFileSync(join(home, ".codex-global-state.json"), JSON.stringify({
+      "local-projects": { stale: { name: "Old folder", rootPaths: [oldRoot] } },
+      "thread-project-assignments": { cleared: { projectKind: "local", projectId: "stale" } },
+    }));
+    const db = new DatabaseSync(join(home, ".codex-global-state.sqlite"));
+    try {
+      db.exec("CREATE TABLE settings (scope TEXT, key TEXT, value TEXT, PRIMARY KEY (scope, key)) WITHOUT ROWID");
+      const put = db.prepare("INSERT INTO settings VALUES ('global', ?, ?)");
+      for (const [key, value] of Object.entries({
+        "local-projects": { desktop: { name: "Old folder", rootPaths: [root] } },
+        "thread-project-assignments": { explicit: { projectKind: "local", projectId: "desktop" } },
+        "app-server-project-id-by-legacy-project-id-by-host": { "local:C:": { desktop: "native-id" } },
+        "projectless-thread-ids": ["projectless"],
+      })) put.run(key, JSON.stringify(value));
+    } finally { db.close(); }
+    const pending = h.runtime.catalog();
+    h.resolveNext({ data: ids.map((id, index) => ({ id, cwd: [oldRoot, `${root}/materials`, root, oldRoot, oldRoot][index],
+      projectId: null, createdAt: 100, updatedAt: 200, turns: [] })) });
+    const rows = await pending;
+    const expected = { projectId: "native-id", name: "Old folder", cwd: root };
+    expect(rows.map(row => row.codexProject ?? row.codexSection)).toEqual([expected, expected, "projectless", "other", "other"]);
+    expect(rows[0]?.cwd).toBe(oldRoot);
+  });
+
+  it("selects Desktop project members by path aliases, root hints and explicit assignments", async () => {
+    const h = makeHarness({ desktop: true });
+    const entries = [
+      ["aliased", "D:/canonical-alias/nested", "local-project"],
+      ["hinted", "D:/worktrees/sibling", "local-project"],
+      ["explicit-also-marked", "D:/outside", "local-project"],
+      ["marked-under-alias", "D:/canonical-alias/nested", undefined],
+      ["hint-cannot-win-over-assignment", "D:/canonical-alias", "other-project"],
+      ["marked-with-hint", "D:/worktrees/sibling", undefined],
+    ] as const;
+    h.runtime.seedDesktopThreads(entries.map(([id]) => id));
+    writeFileSync(join(dirname(h.rolloutRoot), ".codex-global-state.json"), JSON.stringify({
+      "local-projects": {
+        "local-project": { name: "Project", rootPaths: ["D:/project"], rootPathAliases: [{ alias: "D:/canonical-alias" }] },
+        "other-project": { name: "Other", rootPaths: ["D:/other"] },
+      },
+      "thread-project-assignments": {
+        "explicit-also-marked": { projectKind: "local", projectId: "local-project" },
+        "hint-cannot-win-over-assignment": { projectKind: "local", projectId: "other-project" },
+      },
+      "projectless-thread-ids": ["explicit-also-marked", "marked-under-alias", "marked-with-hint"],
+      "electron-owner-value:thread-workspace-root-hints:owner": {
+        hinted: "d:\\PROJECT", "hint-cannot-win-over-assignment": "D:/project", "marked-with-hint": "D:/project",
+      },
+    }));
+    const pending = h.runtime.catalog();
+    h.resolveNext({ data: entries.map(([id, cwd]) => ({ id, cwd, createdAt: 100, updatedAt: 200 })) });
+    expect((await pending).map(row => [row.sessionId, row.codexProject?.projectId])).toEqual(
+      entries.map(([id, , projectId]) => [`codex-desktop:${id}`, projectId]),
+    );
+  });
+
+  it("links a live Git worktree to a registered project without grouping a separate clone", async () => {
+    const h = makeHarness();
+    const home = dirname(h.rolloutRoot);
+    const repo = join(home, "project");
+    const commonDir = join(repo, ".git");
+    const gitDir = join(commonDir, "worktrees", "feature");
+    const linked = join(home, "feature");
+    const clone = join(home, "same-remote");
+    mkdirSync(gitDir, { recursive: true });
+    mkdirSync(join(linked, "nested"), { recursive: true });
+    mkdirSync(join(clone, ".git"), { recursive: true });
+    writeFileSync(join(linked, ".git"), `gitdir: ${gitDir}\n`);
+    writeFileSync(join(gitDir, "commondir"), "../..\n");
+    writeFileSync(join(home, ".codex-global-state.json"), JSON.stringify({
+      "local-projects": { project: { name: "Project", rootPaths: [repo] } },
+    }));
+    const chatRoot = join(home, "custom-chat-dir");
+    writeFileSync(join(home, "config.toml"), `[desktop]\nprojectlessWorkspaceRoot = ${JSON.stringify(chatRoot)}\n`);
+    const pending = h.runtime.catalog();
+    h.resolveNext({ data: [["linked", join(linked, "nested")], ["clone", clone], ["home-chat", "~"], ["custom-chat", join(chatRoot, "custom", "outputs")],
+      ["different-dir", `${chatRoot}-other`]]
+      .map(([id, cwd]) => ({ id, cwd, createdAt: 100, updatedAt: 200 })) });
+    const rows = await pending;
+    expect(rows[0]?.codexProject).toEqual({ projectId: "project", name: "Project", cwd: repo });
+    expect(rows[1]).toMatchObject({ sessionId: "clone", codexSection: "other" });
+    expect(rows[2]).toMatchObject({ sessionId: "home-chat", codexSection: "projectless" });
+    expect(rows[3]).toMatchObject({ sessionId: "custom-chat", codexSection: "projectless" });
+    expect(rows[4]).toMatchObject({ sessionId: "different-dir", codexSection: "other" });
   });
 
   it("catalog：thread/list 的结果映射成 agentKind=codex 的目录条目（Unix 秒 → 毫秒）", async () => {

@@ -833,6 +833,8 @@ internal fun mergeSessionCatalogEntry(
         agentKind = incoming.agentKind ?: existing.agentKind,
         archived = incoming.archived ?: existing.archived,
         modelProvider = incoming.modelProvider?.takeIf(String::isNotBlank) ?: existing.modelProvider,
+        codexProject = if (incoming.codexSection != null) null else incoming.codexProject ?: existing.codexProject,
+        codexSection = if (incoming.codexProject != null) null else incoming.codexSection ?: existing.codexSection,
     )
 }
 
@@ -1300,11 +1302,14 @@ internal data class CachedDirectoryGroup(
     val label: String? = null,
     /** Stable project identity when the Codex app-server provides one. */
     val projectId: String? = null,
-    /** Codex sessions without a native project are intentionally kept together. */
-    val isUnassignedCodex: Boolean = false,
+    val isRecentCodex: Boolean = false,
 ) {
     val modifiedAt: Long = sessions.maxOfOrNull(CachedSessionRow::modifiedAt) ?: 0L
-    val key: String get() = projectId ?: if (isUnassignedCodex) "codex-no-project" else cwd
+    val key: String get() = projectId ?: when {
+        isRecentCodex -> "codex-recent"
+        else -> cwd
+    }
+    val directoryQueryPath: String? get() = cwd.takeIf { projectId == null && !isRecentCodex }
 }
 
 /** The paired Host owns the entire authenticated directory and its device-scoped cache. */
@@ -1415,7 +1420,7 @@ internal fun groupCachedHistoryRows(
             CachedHistoryGroupKey.WorkingDirectory(row.cwd)
         } else {
             row.catalogEntry?.codexProject?.let { CachedHistoryGroupKey.CodexProject(it.projectId) }
-                ?: CachedHistoryGroupKey.UnassignedCodex
+                ?: CachedHistoryGroupKey.RecentCodex
         }
     }
     val directories = groups
@@ -1425,7 +1430,7 @@ internal fun groupCachedHistoryRows(
                 cwd = when (group) {
                     is CachedHistoryGroupKey.WorkingDirectory -> group.cwd
                     is CachedHistoryGroupKey.CodexProject -> project!!.cwd
-                    CachedHistoryGroupKey.UnassignedCodex -> ""
+                    CachedHistoryGroupKey.RecentCodex -> ""
                 },
                 sessions = directoryRows.sortedWith(
                     compareByDescending<CachedSessionRow> { it.sortKey() }
@@ -1433,11 +1438,11 @@ internal fun groupCachedHistoryRows(
                 ),
                 label = when (group) {
                     is CachedHistoryGroupKey.CodexProject -> project!!.name
-                    CachedHistoryGroupKey.UnassignedCodex -> L10n.tr("无项目的聊天")
+                    CachedHistoryGroupKey.RecentCodex -> L10n.tr("最近")
                     is CachedHistoryGroupKey.WorkingDirectory -> null
                 },
                 projectId = (group as? CachedHistoryGroupKey.CodexProject)?.identity,
-                isUnassignedCodex = group == CachedHistoryGroupKey.UnassignedCodex,
+                isRecentCodex = group == CachedHistoryGroupKey.RecentCodex,
             )
         }
         .sortedWith(
@@ -1450,7 +1455,7 @@ internal fun groupCachedHistoryRows(
 private sealed interface CachedHistoryGroupKey {
     data class WorkingDirectory(val cwd: String) : CachedHistoryGroupKey
     data class CodexProject(val identity: String) : CachedHistoryGroupKey
-    data object UnassignedCodex : CachedHistoryGroupKey
+    data object RecentCodex : CachedHistoryGroupKey
 }
 
 /**

@@ -4601,17 +4601,19 @@ describe("Codex 虚拟 runtime 接线（spec §7.4 的 M4 验收）", () => {
     expect(listRequests).toHaveLength(2);
   });
 
-  it("sends the Codex project and projectless groups together on the paired device's first catalog page", async () => {
+  it("sends Codex projects and a single Recent group together on the paired device's first catalog page", async () => {
     stateDir = await mkdtemp(join(tmpdir(), "orbis-codex-project-catalog-"));
     relay = await startRelayLocal(stateDir);
     const cwd = "D:/Desktop/新建文件夹";
     await writeFile(join(stateDir, ".codex-global-state.json"), JSON.stringify({
-      "projectless-thread-ids": ["same-root-projectless"],
+      "local-projects": { project: { name: "新建文件夹", rootPaths: [cwd] } },
+      "projectless-thread-ids": ["same-root-projectless", ...Array.from({ length: 25 }, (_, i) => `standalone-${i}`)],
     }));
     const rows = [
       { id: "same-root-projectless", cwd, updatedAt: 3 },
       ...Array.from({ length: 25 }, (_, i) => ({ id: `standalone-${i}`, cwd: `D:/Documents/Codex/2026-11-27/chat-${i}`, updatedAt: 2 })),
       { id: "project-chat", cwd, updatedAt: 1 },
+      { id: "other-chat", cwd: "D:/ordinary-unregistered", updatedAt: 0 },
     ];
     const runtime = new CodexRuntime({
       server: { mode: "owned", notify: vi.fn(), request: vi.fn(async (method: string, params?: { archived?: boolean }) => {
@@ -4636,12 +4638,17 @@ describe("Codex 虚拟 runtime 接线（spec §7.4 的 M4 验收）", () => {
     sendRequest(device, { type: "session.catalog.capabilities.request", protocolVersion: PROTOCOL_VERSION, requestId: "caps" });
     await next("caps");
     sendRequest(device, { type: "session.catalog.query", protocolVersion: PROTOCOL_VERSION, requestId: "first-page", format: "v1",
-      query: { text: "", archived: false, agentKind: null, provider: "all" }, cursor: null, limit: 2 });
+      query: { text: "", archived: false, agentKind: null, provider: "all" }, cursor: null, limit: 3 });
     const page = await next("first-page") as unknown as CatalogQueryPage;
     expect(page).toMatchObject({ type: "session.catalog.page", directoryCount: 2, page: { totalSessions: rows.length } });
-    expect(page.page.sessions.map(row => [row.sessionId, row.codexProject])).toEqual([
-      ["same-root-projectless", undefined], ["project-chat", { projectId: expect.stringMatching(/^cwd:/u), name: "新建文件夹", cwd }],
+    expect(page.page.sessions.map(row => [row.sessionId, row.codexProject ?? row.codexSection])).toEqual([
+      ["same-root-projectless", "projectless"], ["project-chat", { projectId: "project", name: "新建文件夹", cwd }],
+      ["standalone-0", "projectless"],
     ]);
+    sendRequest(device, { type: "session.catalog.query", protocolVersion: PROTOCOL_VERSION, requestId: "find-recent", format: "v1",
+      query: { text: "ordinary-unregistered", archived: false, agentKind: null, provider: "all" }, cursor: null, limit: 3 });
+    const filtered = await next("find-recent") as unknown as CatalogQueryPage;
+    expect(filtered.page.sessions.map(row => [row.sessionId, row.codexSection])).toEqual([["other-chat", "other"]]);
   });
 
   it("keeps terminal and desktop Codex identities separate over the device protocol", async () => {

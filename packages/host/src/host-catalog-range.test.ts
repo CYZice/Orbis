@@ -17,13 +17,13 @@ const setup = () => {
 };
 
 describe("Host catalog immutable ranges", () => {
-  it("puts Codex projects on the first bounded page instead of previewing each projectless cwd", () => {
+  it("puts Codex projects on the first bounded page alongside one Recent section", () => {
     const { facts } = setup();
     const codexProject = { projectId: "orbis", name: "Orbis", cwd: "D:/repo" };
     const project = session(200, { agentKind: "codex", codexProject, modifiedAt: 2 });
     const worktree = session(201, { agentKind: "codexDesktop", codexProject, cwd: "D:/other-worktree", modifiedAt: 1 });
     const chats = Array.from({ length: 100 }, (_, n) => session(n, {
-      agentKind: "codex", cwd: `D:/chat-${n}`, modifiedAt: 200 - n, firstMessage: "x".repeat(3500),
+      agentKind: "codex", codexSection: n % 2 === 0 ? "projectless" : "other", cwd: `D:/chat-${n}`, modifiedAt: 200 - n, firstMessage: "x".repeat(3500),
     }));
     const pi = session(202, { cwd: project.cwd });
     const rows = [...chats, project, worktree, pi];

@@ -41,7 +41,7 @@ function isCodexCatalogRow(row: AgentSessionSummary): boolean {
 
 function catalogGroup(row: AgentSessionSummary): string {
   if (!isCodexCatalogRow(row)) return row.cwd;
-  return `\0codex:${row.codexProject?.projectId ?? ""}`;
+  return row.codexProject ? `\0codex:project:${row.codexProject.projectId}` : "\0codex:recent";
 }
 
 /** Binary search keeps truncation work logarithmic even for thousands of long catalog entries. */

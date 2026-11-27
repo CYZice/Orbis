@@ -165,9 +165,9 @@ struct SessionDirectory: Identifiable {
     let sessions: [SessionSummary]
     let label: String?
     let projectId: String?
-    let isUnassignedCodex: Bool
-    var id: String { projectId ?? (isUnassignedCodex ? "codex-no-project" : path) }
-    var queryPath: String? { projectId == nil && !isUnassignedCodex ? path : nil }
+    let isRecentCodex: Bool
+    var id: String { projectId ?? (isRecentCodex ? "codex-recent" : path) }
+    var queryPath: String? { projectId == nil && !isRecentCodex ? path : nil }
     /// 目录的「最近使用」时间 = 其中最新会话的修改时间（与 Android `CachedDirectoryGroup.modifiedAt` 一致）。
     var modifiedAt: Int64 { sessions.map(\.modifiedAt).max() ?? 0 }
 }
@@ -179,24 +179,23 @@ let directorySessionPreviewLimit = 3
 func sessionDirectories(_ sessions: [SessionSummary], query: String, kind: String?, archived: Bool,
                         title: (SessionSummary) -> String) -> [SessionDirectory] {
     let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
-    enum Group: Hashable { case working(String), project(String), unassigned }
+    enum Group: Hashable { case working(String), project(String), recent }
     let grouped = Dictionary(grouping: sessions.filter { session in
         (session.archived == true) == archived && (kind == nil || session.agentKind == kind)
     }) { session -> Group in
         guard session.agentKind == "codex" || session.agentKind == "codexDesktop" else { return .working(session.cwd) }
-        return session.codexProject.map { .project($0.projectId) } ?? .unassigned
+        return session.codexProject.map { .project($0.projectId) } ?? .recent
     }
     return grouped.compactMap { group, groupedSessions in
         let path: String
         let label: String?
         let projectId: String?
-        let isUnassigned: Bool
         switch group {
-        case .working(let value): path = value; label = nil; projectId = nil; isUnassigned = false
+        case .working(let value): path = value; label = nil; projectId = nil
         case .project(let id):
             let project = groupedSessions.first?.codexProject
-            path = project?.cwd ?? ""; label = project?.name; projectId = id; isUnassigned = false
-        case .unassigned: path = ""; label = L10n.tr("无项目的聊天"); projectId = nil; isUnassigned = true
+            path = project?.cwd ?? ""; label = project?.name; projectId = id
+        case .recent: path = ""; label = L10n.tr("最近"); projectId = nil
         }
         let matching = groupedSessions.filter { session in
             term.isEmpty || path.localizedCaseInsensitiveContains(term) || session.cwd.localizedCaseInsensitiveContains(term) ||
@@ -206,7 +205,7 @@ func sessionDirectories(_ sessions: [SessionSummary], query: String, kind: Strin
         guard !matching.isEmpty else { return nil }
         return SessionDirectory(path: path, sessions: matching.sorted { lhs, rhs in
             lhs.modifiedAt != rhs.modifiedAt ? lhs.modifiedAt > rhs.modifiedAt : lhs.sessionId < rhs.sessionId
-        }, label: label, projectId: projectId, isUnassignedCodex: isUnassigned)
+        }, label: label, projectId: projectId, isRecentCodex: group == .recent)
     }.sorted { lhs, rhs in
         let left = lhs.modifiedAt, right = rhs.modifiedAt
         return left != right ? left > right : lhs.labelOrPath.localizedStandardCompare(rhs.labelOrPath) == .orderedAscending

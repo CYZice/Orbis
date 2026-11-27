@@ -154,20 +154,24 @@ struct PresentationTests {
         #expect(directorySessionPreviewLimit == 3)
     }
 
-    @Test func codexDirectoriesFollowNativeProjectsAndCollectUnassignedChats() {
+    @Test func codexDirectoriesFollowNativeProjectsAndCollectRecentChats() {
         var projectChat = session("project", cwd: "D:/worktree/orbis")
         projectChat.codexProject = CodexSessionProject(projectId: "orbis-project", name: "Orbis", cwd: "D:/work/orbis")
         projectChat.modifiedAt = 30
         var unassigned = session("unassigned", cwd: "D:/work/orbis")
         unassigned.modifiedAt = 20
-        let directories = sessionDirectories([projectChat, unassigned], query: "", kind: nil, archived: false,
+        unassigned.codexSection = "projectless"
+        var other = session("other", cwd: "D:/unregistered")
+        other.modifiedAt = 10
+        other.codexSection = "other"
+        let directories = sessionDirectories([projectChat, unassigned, other], query: "", kind: nil, archived: false,
                                              title: { $0.name ?? "" })
         #expect(directories.count == 2)
         #expect(directories.first?.label == "Orbis")
         #expect(directories.first?.projectId == "orbis-project")
         #expect(directories.first?.sessions.map(\.sessionId) == ["project"])
-        #expect(directories.last?.isUnassignedCodex == true)
-        #expect(directories.last?.label == "无项目的聊天")
+        #expect(directories.last?.isRecentCodex == true)
+        #expect(directories.last?.sessions.map(\.sessionId) == ["unassigned", "other"])
     }
 
     /// Host 的 runtime 元数据不带 agentKind：Codex 不能因为缺字段被显示成 Pi。

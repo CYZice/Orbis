@@ -31,13 +31,13 @@ class CatalogViewReadsTest {
         var state = RemoteState(hostId = "paired-host", hostName = "devbox", sessions = mapOf(stale.sessionId to stale))
         val loader = CatalogViewReads({ sent += it; true }, { result, rows ->
             state = state.copy(catalogQuery = result, sessions = state.sessions + rows.associate { entry ->
-                entry.sessionId to entry.copy(hasHistoryCache = state.sessions[entry.sessionId]?.hasHistoryCache == true)
+                entry.sessionId to mergeSessionCatalogEntry(state.sessions[entry.sessionId], entry)
             })
         })
         enable(loader, sent); loader.setView(CatalogQuery())
         val reply = page(sent.last(), emptyList(), next = null)
         val rows = JsonArray(listOf(
-            buildJsonObject { put("sessionId", "same-root-projectless"); put("agentKind", "codex"); put("cwd", cwd) },
+            buildJsonObject { put("sessionId", "same-root-projectless"); put("agentKind", "codex"); put("cwd", cwd); put("codexSection", "projectless") },
             buildJsonObject {
                 put("sessionId", "project-chat"); put("agentKind", "codex"); put("cwd", cwd)
                 put("codexProject", buildJsonObject { put("projectId", "project"); put("name", "Registered project"); put("cwd", cwd) })
@@ -47,8 +47,13 @@ class CatalogViewReadsTest {
             "page" to JsonObject(reply.getValue("page").jsonObject + ("sessions" to rows))))))
         val directories = cachedHistoryTree(state).single().directories
         assertEquals(listOf("project-chat"), directories.single { it.label == "Registered project" }.sessions.map { it.sessionId })
-        assertEquals(listOf("same-root-projectless"), directories.single { it.isUnassignedCodex }.sessions.map { it.sessionId })
-        assertTrue(state.sessions.getValue("project-chat").hasHistoryCache)
+        assertEquals(listOf("same-root-projectless"), directories.single { it.isRecentCodex }.sessions.map { it.sessionId })
+        val project = state.sessions.getValue("project-chat")
+        assertTrue(project.hasHistoryCache)
+        val moved = mergeSessionCatalogEntry(project, SessionCatalogEntry("project-chat", agentKind = "codex", codexSection = "other"))
+        assertEquals(null, moved.codexProject)
+        assertEquals("other", moved.codexSection)
+        assertTrue(moved.hasHistoryCache)
     }
 
     // SC-01/04: opening and scrolling own demand; a response alone must not download the

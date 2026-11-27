@@ -1155,6 +1155,7 @@ internal object LocalizationCatalog {
         "未能确认送达，可以重新发送" to "Delivery could not be confirmed. You can send again.",
         "未获取到 Git 分支" to "Git branch not available",
         "未记录目录" to "Folder not recorded",
+        "最近" to "Recent",
         "未连接" to "Not connected",
         "未连接到电脑" to "Not connected to computer",
         "未连接到电脑，连接恢复后可重试。" to "Not connected to the computer. Retry after reconnecting.",
