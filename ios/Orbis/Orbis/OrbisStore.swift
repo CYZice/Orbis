@@ -52,6 +52,7 @@ final class HostConnection: ObservableObject {
     @Published private(set) var sessions: [SessionSummary] = [] {
         didSet { markHomeMetadataChanged(); directoryInputRevision &+= 1; directoryMetadataRevision &+= 1; directoryViewRevision &+= 1 }
     }
+    @Published private(set) var projectlessWorkspaceRoot: String?
     /// sessionId → 目录条目。聊天页每条消息、每次流式更新都会查询，不能线性扫描整个目录。
     private var sessionIndex: [String: SessionSummary] = [:]
     private let sessionCatalogWorker = SessionCatalogPreparationWorker()
@@ -937,7 +938,7 @@ final class HostConnection: ObservableObject {
         loadedSessionCacheKey = nil
         homeDirectoryReceived = false; homePresentation = .preparing
         selectedRuntimeId = nil; selectedHostId = nil; activePath = nil; pathRTT = nil; connection = .offline
-        currentProviders = [:]; sessionListRequest = nil; modelCatalogReceived = false; authenticatedModelEpoch = nil; connectionEvents = []
+        currentProviders = [:]; projectlessWorkspaceRoot = nil; sessionListRequest = nil; modelCatalogReceived = false; authenticatedModelEpoch = nil; connectionEvents = []
         transfers.setConnection(nil, connected: false)
         hostState.setConnection(nil, connected: false)
         agentState.setConnection(nil, connected: false)
@@ -999,7 +1000,7 @@ final class HostConnection: ObservableObject {
         hostState.setConnection(pairing, connected: false)
         agentState.setConnection(pairing, connected: false)
         notifications.setConnection(pairing, connected: false)
-        currentProviders = [:]; sessionListRequest = nil; modelCatalogReceived = false; authenticatedModelEpoch = nil; connectionEvents = []
+        currentProviders = [:]; projectlessWorkspaceRoot = nil; sessionListRequest = nil; modelCatalogReceived = false; authenticatedModelEpoch = nil; connectionEvents = []
         transfers.setConnection(pairing, connected: false)
         toolContent.close(); turnFileChanges.clear(); toolInventories.clear(); toolAcknowledgements = [:]; pendingAppliedBaselines = [:]
         runtimes = []; messages = []; selectedRuntimeId = nil; selectedOfflineSession = nil
@@ -3104,6 +3105,7 @@ final class HostConnection: ObservableObject {
             guard !modelCatalogReceived else { return }
             guard let request = sessionListRequest, message["requestId"] as? String == request else { return }
             sessionListRequest = nil
+            projectlessWorkspaceRoot = (message["projectlessWorkspaceRoot"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             if let values = message["sessions"] as? [[String: Any]] {
                 let generation = connectionGeneration
                 let decoded = await sessionCatalogWorker.decode(values)

@@ -37,7 +37,7 @@ import { CodexToolContentReader } from "./codex-tool-content-reader.js";
 import { CodexAgentTasks, codexChildThread } from "./codex-agent-tasks.js";
 import { CodexTaskRegistry } from "./codex-task-registry.js";
 import { readCodexTurnConfiguration } from "./codex-turn-configuration.js";
-import { codexProjectId, readCodexDesktopProjects } from "./codex-projects.js";
+import { codexProjectId, readCodexDesktopProjects, readCodexProjectlessWorkspaceRoot } from "./codex-projects.js";
 import { codexToolContents, codexToolContentText, codexToolSummary, isCodexToolItem as isToolItem } from "./codex-tool-projection.js";
 
 import type {
@@ -1463,6 +1463,10 @@ export class CodexRuntime implements AgentBackend {
       this.#options.log?.(`Codex project/list 不可用：${describeError(error)}`);
       return [];
     }
+  }
+
+  async projectlessWorkspaceRoot(): Promise<string> {
+    return readCodexProjectlessWorkspaceRoot(this.#codexHome());
   }
 
   /** Persistent thread catalog, with a rollout fallback when app-server discovery fails. */

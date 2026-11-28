@@ -221,6 +221,16 @@ class HomePresentationTest {
         assertEquals(10_000L, projects[0].lastActivityAt)
     }
 
+    @Test fun projectlessWorkspaceIsTheFirstNewChatLocation() {
+        val state = RemoteState(
+            projectlessWorkspaceRoot = "C:/Users/test/Documents/Codex",
+            sessions = mapOf("old" to SessionCatalogEntry("old", cwd = "C:/work", modifiedAt = 1_000L)),
+        )
+        val projects = state.homeProjectPickerEntries()
+        assertEquals("无项目的聊天", projects.first().label)
+        assertEquals("C:/Users/test/Documents/Codex", projects.first().cwd)
+    }
+
     @Test fun nativeCodexRecencyOutranksDiskModifiedAtAndToolOutput() {
         val active = RuntimeSummary("active", "Codex", "C:/Alpha", "running",
             sessionId = "alpha", agentKind = "codex")

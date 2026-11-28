@@ -124,6 +124,9 @@ internal data class RecentHomeProject(
 
 /** Prefer Codex's native named projects; fill gaps with known working directories. */
 internal fun RemoteState.homeProjectPickerEntries(): List<RecentHomeProject> {
+    val projectless = projectlessWorkspaceRoot?.takeIf(String::isNotBlank)?.let {
+        RecentHomeProject(it, L10n.tr("无项目的聊天"), Long.MAX_VALUE, 0)
+    }
     val native = nativeCodexProjects.filter { it.cwd.isNotBlank() && it.name.isNotBlank() }.map {
         RecentHomeProject(it.cwd, it.name, it.recencyAt ?: 0L, 0)
     }
@@ -132,7 +135,7 @@ internal fun RemoteState.homeProjectPickerEntries(): List<RecentHomeProject> {
             RecentHomeProject(project.cwd, project.name, rows.maxOf { it.recencyAt ?: it.modifiedAt }, rows.size)
         }.sortedByDescending { it.lastActivityAt }
     val inferred = recentHomeProjects(limit = Int.MAX_VALUE)
-    return (native + assigned + inferred).distinctBy {
+    return (listOfNotNull(projectless) + native + assigned + inferred).distinctBy {
         it.cwd.trimEnd('/', '\\').lowercase(java.util.Locale.ROOT)
     }
 }

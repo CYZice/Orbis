@@ -44,6 +44,7 @@ class SessionDraftConfigurationInstrumentedTest {
                 }
             }
         } }
+        compose.onNodeWithTag("draft-advanced-settings").performClick()
         val card = compose.onNodeWithTag("session-draft").fetchSemanticsNode().boundsInRoot
         val modelBounds = compose.onNodeWithTag("draft-config-model").assertIsDisplayed().assertIsEnabled().fetchSemanticsNode().boundsInRoot
         val thinkingBounds = compose.onNodeWithTag("draft-config-thinking").assertIsDisplayed().assertIsEnabled().fetchSemanticsNode().boundsInRoot
@@ -94,6 +95,7 @@ class SessionDraftConfigurationInstrumentedTest {
             SessionDraftCard(state, true, "/fixture", {}, {}, {}, onSaveConfiguration = { saved += it },
                 onSubmit = { _, _, _, _, _ -> false })
         } }
+        compose.onNodeWithTag("draft-advanced-settings").performClick()
         compose.onNodeWithTag("draft-config-permissions").performClick()
         val top = compose.onNodeWithTag("orbis-sheet-surface").fetchSemanticsNode().positionInWindow.y
         compose.onNodeWithTag("draft-permissions-apply").assertIsDisplayed().assertIsNotEnabled()

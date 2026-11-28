@@ -395,7 +395,6 @@ internal fun RemoteApp(
                 },
                 draftContent = { open -> SessionDraftCard(state, open, newSessionCwd,
                     model::browseSessions, model::browseInto, model::browseUp, onCancel = ::closeSessionDraft, drafts = sessionDrafts,
-                    autoProjectPicker = newSessionCwd == null,
                     onLoadConfiguration = model::loadSessionConfiguration, onSaveConfiguration = model::saveSessionConfiguration) { kind, cwd, text, origin, fieldOrigin ->
                     val submission = model.sendFirstSessionMessage(kind, cwd, text, newSessionHostId)
                     if (submission != null) {
@@ -972,12 +971,6 @@ internal fun RuntimeListScreen(
                             MotionText(L10n.tr("已选择 {0} 项", selectedIds.size), style = MaterialTheme.typography.titleLarge)
                         } else Column {
                             OrbisWordmark()
-                            Text(
-                                "Easy Agents Everywhere",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                            )
                         }
                     },
                     actions = {

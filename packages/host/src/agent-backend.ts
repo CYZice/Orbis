@@ -73,6 +73,8 @@ export interface AgentBackend {
   catalogCoverage?(archived?: boolean): Promise<{ sessions: AgentSessionSummary[]; complete: boolean }>;
   /** Optional native Codex projects; other backends simply omit this capability. */
   listProjects?(): Promise<Array<{ cwd: string; name: string; projectId?: string; recencyAt?: number }>>;
+  /** Hidden Codex workspace used for new conversations without project membership. */
+  projectlessWorkspaceRoot?(): Promise<string | undefined>;
   /** Effective configured provider, independent of any open session. Unknown on failure. */
   currentProvider?(): Promise<string | undefined>;
   sessionConfiguration?(cwd: string): Promise<SessionConfigurationCatalog>;

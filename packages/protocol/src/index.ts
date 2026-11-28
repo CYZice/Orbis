@@ -1519,6 +1519,8 @@ export const RelayToDeviceMessageSchema = z.discriminatedUnion("type", [
       projectId: z.string().min(1).max(256).optional(),
       recencyAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
     })).max(160).optional(),
+    /** Hidden Codex workspace used when creating a conversation without project membership. */
+    projectlessWorkspaceRoot: z.string().min(1).max(4096).optional(),
     /** Backend configuration, including when the backend has no sessions. */
     currentProviders: z.array(z.strictObject({
       agentKind: AgentKindSchema,

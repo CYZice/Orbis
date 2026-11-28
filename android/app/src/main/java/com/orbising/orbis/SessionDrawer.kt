@@ -563,16 +563,6 @@ internal fun SessionDrawer(
                                                     contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                                             }
                                         }
-                                        if (directory.cwd.isNotBlank()) {
-                                            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                                                .semantics { contentDescription = L10n.tr("在此目录新建会话") }
-                                                .orbisKeyboardFocus().clickable(enabled = isActiveHost && canCreate, interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                                                    onNewSession(hostId, directory.cwd)
-                                                }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                Icon(OrbisSymbols.Add, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                                                Text(L10n.tr("新建会话"), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                                            }
-                                        }
                                     }
                                 }
                             } }
@@ -751,6 +741,16 @@ private fun DrawerDirectoryHeader(directory: CachedDirectoryGroup, expanded: Boo
             Text((directory.label ?: directoryDisplayName(directory.cwd)).ifBlank { L10n.tr("未记录目录") }, Modifier.weight(1f),
                 style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text("${directory.sessions.size}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (directory.cwd.isNotBlank()) {
+                NeumorphIconButton(
+                    onClick = onCreate,
+                    icon = OrbisSymbols.Add,
+                    contentDescription = L10n.tr("在此目录新建会话"),
+                    size = 32.dp,
+                    compact = true,
+                    enabled = createEnabled,
+                )
+            }
             Icon(OrbisSymbols.ChevronRight, if (expanded) L10n.tr("收起目录") else L10n.tr("展开目录"),
                 modifier = Modifier.size(16.dp).rotate(rotation), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }

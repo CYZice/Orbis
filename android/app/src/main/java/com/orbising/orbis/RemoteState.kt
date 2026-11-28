@@ -548,6 +548,7 @@ data class RemoteState(
     val connection: RelayConnection = RelayConnection.OFFLINE,
     val sessions: Map<String, SessionCatalogEntry> = emptyMap(),
     val nativeCodexProjects: List<NativeCodexProject> = emptyList(),
+    val projectlessWorkspaceRoot: String? = null,
     val deviceId: String? = null,
     /**
      * 已配对 Host 在 runtime 空间里的身份（spec §9.4）。
@@ -850,9 +851,11 @@ private fun reduceSessionListResult(state: RemoteState, message: JsonObject): Re
     val nativeProjects = message["nativeProjects"]?.let { payload ->
         runCatching { sessionMessageJson.decodeFromJsonElement<List<NativeCodexProject>>(payload) }.getOrNull()
     }.orEmpty()
+    val projectlessWorkspaceRoot = message["projectlessWorkspaceRoot"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
     return state.copy(sessionListRequests = state.sessionListRequests - requestId,
         sessionListRequestEpochs = state.sessionListRequestEpochs - requestId,
-        nativeCodexProjects = nativeProjects)
+        nativeCodexProjects = nativeProjects,
+        projectlessWorkspaceRoot = projectlessWorkspaceRoot)
 }
 
 private fun reduceSessionArchiveChanged(state: RemoteState, message: JsonObject): RemoteState {

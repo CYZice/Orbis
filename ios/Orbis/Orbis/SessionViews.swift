@@ -659,6 +659,11 @@ struct SessionDraftView: View {
     /// Both native entries of this family can start here, so the variant is a real choice.
     private var hasVariants: Bool { agentVariants(family).count > 1 && agentVariants(family).allSatisfy(allowed.contains) }
     private var currentPath: String? { path ?? presetCwd ?? store.browse?.path }
+    private var isProjectless: Bool {
+        guard let root = store.projectlessWorkspaceRoot, let currentPath else { return false }
+        return root.trimmingCharacters(in: CharacterSet(charactersIn: "/\\")).caseInsensitiveCompare(
+            currentPath.trimmingCharacters(in: CharacterSet(charactersIn: "/\\"))) == .orderedSame
+    }
     private var hasMessage: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var configuration: SessionConfigurationSnapshot? {
         store.sessionConfiguration.flatMap { $0.agentKind == agent && $0.cwd == currentPath ? $0 : nil }
@@ -726,7 +731,7 @@ struct SessionDraftView: View {
             OrbisMotionButton { focused = false; choosingDirectory = true } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "folder").font(.system(size: 16))
-                    Text(currentPath ?? L10n.tr("选择工作目录")).font(.orbisCaption(mono: true)).lineLimit(1).truncationMode(.middle)
+                    Text(isProjectless ? L10n.tr("无项目的聊天") : currentPath ?? L10n.tr("选择工作目录")).font(.orbisCaption(mono: true)).lineLimit(1).truncationMode(.middle)
                     Spacer(minLength: 0); Image(systemName: "chevron.down").font(.orbisCaption())
                 }.foregroundStyle(p.secondary).frame(minHeight: 48).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityIdentifier("draft-directory")
@@ -884,7 +889,14 @@ struct SessionDraftView: View {
     private var directorySheet: some View {
         VStack(spacing: 16) {
             OrbisPageHeader(title: L10n.tr("在哪个目录里开始"), closes: true, back: { choosingDirectory = false }) { EmptyView() }
-            ScrollView { RemoteDirectoryView() }
+            ScrollView {
+                if let root = store.projectlessWorkspaceRoot {
+                    OrbisActionButton(title: L10n.tr("无项目的聊天"), symbol: "bubble.left.and.bubble.right") {
+                        path = root; choosingDirectory = false
+                    }.accessibilityIdentifier("draft-projectless")
+                }
+                RemoteDirectoryView()
+            }
             OrbisActionButton(title: L10n.tr("选择这个目录"), symbol: "checkmark") {
                 path = store.browse?.path; choosingDirectory = false
             }.disabled(store.browse?.path?.isEmpty != false || store.browse?.loading != false || store.browse?.error != nil)

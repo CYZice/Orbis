@@ -2801,7 +2801,7 @@ export class HostService {
         // 实测 2.5–6s，Pi 侧全盘扫）。手机在每次激活/重连/回前台都会请求一遍，
         // 不收敛的话这些请求会互相堆叠、把每一台设备都拖进几十秒的等待。
         // 这里按 TTL 缓存 + 合并并发请求：同一时刻的多个 `session.list` 共享同一次扫描。
-        const [{ sessions, cached }, providers, projectPages] = await Promise.all([
+        const [{ sessions, cached }, providers, projectPages, projectlessRoots] = await Promise.all([
           this.#catalogWithCache(),
           Promise.all(this.#backends.filter((backend) => backend.isReady()).map(async (backend) => {
             try {
@@ -2825,6 +2825,14 @@ export class HostService {
               return [];
             }
           })),
+          Promise.all(this.#backends.filter((backend) => backend.isReady()).map(async (backend) => {
+            if (!backend.projectlessWorkspaceRoot) return undefined;
+            try { return await backend.projectlessWorkspaceRoot(); }
+            catch (error) {
+              this.#options.log?.(`读取无项目工作区失败（${backend.kind}）：${describeError(error)}`);
+              return undefined;
+            }
+          })),
         ]);
         // 这里**不再**写 HostState.providers：会话列表只认识「当前 provider」，而这个领域是
         // 整值替换——让它写一次，就会把真正读过清单的那条路径（供应商读取/切换后）写下的
@@ -2835,9 +2843,11 @@ export class HostService {
         const nativeProjects = [...new Map(projectPages.flat().map(project => [
           `${project.projectId ?? project.name}\u0000${process.platform === "win32" ? project.cwd.toLowerCase() : project.cwd}`, project,
         ] as const)).values()].slice(0, 120);
+        const projectlessWorkspaceRoot = projectlessRoots.find((root): root is string => typeof root === "string" && root.length > 0);
         const payload = {
           type: "session.list.result" as const,
           ...(nativeProjects.length === 0 ? {} : { nativeProjects }),
+          ...(projectlessWorkspaceRoot === undefined ? {} : { projectlessWorkspaceRoot }),
           requestId,
           sessions: sessions.filter(row => allowsAgentIdentity(this.#agentView(deviceId), row)).slice(0, 2_000).map(entry => ({ ...entry, hostname: localHostname })),
           currentProviders: providers.flat(),

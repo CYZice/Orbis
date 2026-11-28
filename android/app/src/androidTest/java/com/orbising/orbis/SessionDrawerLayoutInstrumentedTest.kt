@@ -79,8 +79,7 @@ class SessionDrawerLayoutInstrumentedTest {
             // S38 / SC58: navigation is a single-line tree on the drawer face. The row's
             // hit area stays >=48dp and neither text length nor multi-selection moves it.
             assertTrue(before.height >= 48 * compose.density.density)
-            compose.onNodeWithContentDescription("在此目录新建会话").assertDoesNotExist()
-            compose.onNodeWithText("新建会话").assertIsDisplayed()
+            compose.onNodeWithContentDescription("在此目录新建会话").assertIsDisplayed()
 
         }
     }

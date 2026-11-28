@@ -1778,6 +1778,13 @@ describe("CodexRuntime", () => {
     expect(await unsupported).toEqual([]);
   });
 
+  it("resolves the configured projectless workspace without changing thread/start cwd semantics", async () => {
+    const h = makeHarness();
+    writeFileSync(join(dirname(h.rolloutRoot), "config.toml"),
+      `[desktop]\nprojectlessWorkspaceRoot = ${JSON.stringify("D:/Codex Chats")}\n`);
+    await expect(h.runtime.projectlessWorkspaceRoot()).resolves.toBe("d:/codex chats");
+  });
+
   it("publishes native assignments and Desktop root scopes without grouping projectless outputs", async () => {
     const h = makeHarness({ desktop: true });
     const ids = ["native", "desktop", "same-cwd", "child", "sibling", "removed", "remote", "output", "output-hint", "secondary", "calculus", "calculus-alias"];

@@ -53,6 +53,11 @@ async function projectlessDirectory(home: string, userHome: string): Promise<str
   return rootKey(await realpath(root).catch(() => root));
 }
 
+/** Resolve Codex Desktop's hidden workspace for conversations without a project. */
+export async function readCodexProjectlessWorkspaceRoot(home: string, userHome = homedir()): Promise<string> {
+  return projectlessDirectory(home, userHome);
+}
+
 async function readGitPath(file: string): Promise<string> {
   const handle = await open(file, "r");
   try {

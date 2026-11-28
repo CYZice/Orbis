@@ -63,7 +63,6 @@ internal class SessionDraftStore {
 internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: String?,
     onBrowse: (String?) -> Unit, onBrowseInto: (String) -> Unit, onBrowseUp: () -> Unit,
     onCancel: () -> Unit = {}, drafts: SessionDraftStore? = null,
-    autoProjectPicker: Boolean = false,
     onLoadConfiguration: (String, String) -> Unit = { _, _ -> },
     onSaveConfiguration: (SessionConfigurationValues) -> Unit = {},
     onSubmit: (String, String, String, Rect, Rect) -> Boolean) {
@@ -84,9 +83,13 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
     var fieldBounds by remember { mutableStateOf(Rect.Zero) }
     val focus = remember { FocusRequester() }
     var configurationPanel by remember { mutableStateOf<String?>(null) }
+    var advancedOpen by rememberSaveable { mutableStateOf(false) }
     var permissionCategory by remember { mutableStateOf<String?>(null) }
     var proposedPermissions by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     val config = state.sessionConfiguration.takeIf { it.agentKind == kind && it.cwd == cwd }
+    val projectless = state.projectlessWorkspaceRoot?.let { root ->
+        root.trimEnd('/', '\\').equals(cwd.trimEnd('/', '\\'), ignoreCase = true)
+    } == true
     LaunchedEffect(open, kind, cwd, state.e2eReady, state.sessionConfigurationSupported, state.kimiCodeSupported) {
         if (open && state.e2eReady && state.sessionConfigurationSupported && cwd.isNotBlank()) onLoadConfiguration(kind, cwd)
     }
@@ -104,11 +107,6 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
     fun versionsAvailable(of: String) = agentVariants(of).size > 1 && agentVariants(of).all { supported?.contains(it) == true }
     LaunchedEffect(open) {
         if (open) {
-            if (autoProjectPicker && state.homeProjectPickerEntries().isNotEmpty()) {
-                browsingFolders = false
-                projectSearch = ""
-                directoryOpen = true
-            }
             pressed = true; appearance.snapTo(0f)
             delay(InteractionMotion.duration(200).toLong())
             pressed = false
@@ -118,6 +116,7 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
         } else {
             appearance.animateTo(0f, tween(InteractionMotion.duration(InteractionMotion.State)))
             pressed = true
+            advancedOpen = false
         }
     }
     LaunchedEffect(open, presetCwd, state.hostId) {
@@ -195,13 +194,18 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
                     .orbisKeyboardFocus().clickable(role = Role.Button) { browsingFolders = false; projectSearch = ""; directoryOpen = true },
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Icon(OrbisSymbols.Folder, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(cwd.ifBlank { L10n.tr("选择工作目录") }, Modifier.weight(1f), style = MaterialTheme.typography.labelMedium,
+                    Text(if (projectless) L10n.tr("无项目的聊天") else cwd.ifBlank { L10n.tr("选择工作目录") }, Modifier.weight(1f), style = MaterialTheme.typography.labelMedium,
                         fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Icon(OrbisSymbols.KeyboardArrowDown, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                if (state.sessionConfigurationSupported) {
-                    if (kind != KIMI_CODE_KIND) {
+                if (state.sessionConfigurationSupported && kind != KIMI_CODE_KIND) {
+                    NeumorphTextButton(
+                        text = L10n.tr(if (advancedOpen) "收起高级设置" else "高级设置"),
+                        onClick = { advancedOpen = !advancedOpen },
+                        modifier = Modifier.fillMaxWidth().testTag("draft-advanced-settings"),
+                    )
+                    if (advancedOpen) {
                         val permissionSummary = config?.snapshot?.catalog?.permissions?.mapNotNull { setting ->
                             setting.options.firstOrNull { it.value == config.values.permissions[setting.id] }?.label
                         }?.takeIf { it.isNotEmpty() }?.joinToString(" · ") { L10n.hostText(it) } ?: L10n.tr("电脑端默认")
@@ -222,10 +226,12 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
                             }
                         }
                     }
-                    config?.error?.let { StatusWithInfo(L10n.tr("设置未确认"), L10n.hostText(it), error = true) }
-                    if (config?.requestId != null) Text(L10n.tr("正在确认配置…"), style = MaterialTheme.typography.labelMedium)
-                    if (config?.error != null) NeumorphTextButton(L10n.tr("刷新"), onClick = { onLoadConfiguration(kind, cwd) })
-                } else StatusWithInfo(L10n.tr("电脑端默认"), L10n.tr("升级电脑端后可在此选择模型、思考深度和权限"))
+                } else if (!state.sessionConfigurationSupported) {
+                    StatusWithInfo(L10n.tr("电脑端默认"), L10n.tr("升级电脑端后可在此选择模型、思考深度和权限"))
+                }
+                config?.error?.let { StatusWithInfo(L10n.tr("设置未确认"), L10n.hostText(it), error = true) }
+                if (config?.requestId != null) Text(L10n.tr("正在确认配置…"), style = MaterialTheme.typography.labelMedium)
+                if (config?.error != null) NeumorphTextButton(L10n.tr("刷新"), onClick = { onLoadConfiguration(kind, cwd) })
                 config?.launchError?.let { error ->
                     val title = config.launchErrorTitle
                     if (title != null) StatusWithInfo(title, L10n.hostText(error), error = true)
@@ -307,8 +313,6 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
                         colors = neumorphFieldColors(),
                     )
                     if (visibleProjects.isNotEmpty()) {
-                        Text(L10n.tr(if (search.isEmpty()) "最近使用的项目" else "搜索结果"),
-                            style = MaterialTheme.typography.titleSmall)
                         visibleProjects.forEach { project ->
                             NeumorphTextButton(
                                 text = project.label,
@@ -316,11 +320,6 @@ internal fun SessionDraftCard(state: RemoteState, open: Boolean, presetCwd: Stri
                                 filled = project.cwd == cwd,
                                 modifier = Modifier.fillMaxWidth().testTag("draft-recent-project"),
                             )
-                        }
-                        if (matches.size > visibleProjects.size) {
-                            Text(L10n.tr("还有 {0} 个项目，请输入名称缩小范围", matches.size - visibleProjects.size),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     } else {
                         Text(L10n.tr(if (search.isEmpty()) "暂无最近项目" else "没有找到匹配的项目"),
